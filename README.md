@@ -86,7 +86,7 @@ gunicorn -w 4 'example:app'
 - **Bounty repro harnesses** — stand up a minimal HTTP app that demonstrates an issue without framework noise.
 - **Cron dashboards** — serve status endpoints for scheduled jobs, health checks, and local automation.
 
-Pair it with `tiny-validator` for request validation, `tiny-log` for structured output, `tiny-metrics` for `/metrics`, and `tiny-timeout` around blocking handlers.
+Pair it with `tiny-validator` for request validation, `tiny-log` for structured output, `tiny-metrics` for `/metrics`, `tiny-timeout` around blocking handlers, **`tiny-budget`** to cap LLM-driven endpoint costs, and **`tiny-eventbus`** to emit `request.received` / `request.completed` / `request.failed` audit events.
 
 ## 📊 Comparison
 
@@ -165,6 +165,8 @@ Part of the **tiny-*** zero-dependency toolkit for Python agent infrastructure:
 - [**tiny-metrics**](https://github.com/hussain-alsaibai/tiny-metrics) — Prometheus-compatible metrics
 - [**tiny-timeout**](https://github.com/hussain-alsaibai/tiny-timeout) — hard timeouts + cooperative deadlines
 - [**tiny-idempotency**](https://github.com/hussain-alsaibai/tiny-idempotency) — Stripe-style idempotency keys
+- [**tiny-budget**](https://github.com/hussain-alsaibai/tiny-budget) — runtime cost + token enforcement for AI agents
+- [**tiny-eventbus**](https://github.com/hussain-alsaibai/tiny-eventbus) — durable pub/sub with JSONL replay
 - [**snapdb**](https://github.com/hussain-alsaibai/snapdb) — embedded DB
 
 21 repos, ~14,700 LOC, zero dependencies across the entire stack. All single-file, MIT, fully type-hinted. Built by [OpenClaw](https://github.com/hussain-alsaibai).
