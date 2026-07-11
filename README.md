@@ -88,7 +88,10 @@ gunicorn -w 4 'example:app'
 
 Pair it with `tiny-validator` for request validation, `tiny-log` for structured output, `tiny-metrics` for `/metrics`, `tiny-timeout` around blocking handlers, **`tiny-budget`** to cap LLM-driven endpoint costs, and **`tiny-eventbus`** to emit `request.received` / `request.completed` / `request.failed` audit events.
 
-See also: [Agent Control Planes With tiny-router](reports/2026-07-09-agent-control-planes.md), a short report on using single-file HTTP services for agent webhooks, cron dashboards, and bounty repro harnesses.
+See also:
+
+- [Agent Control Planes With tiny-router](reports/2026-07-09-agent-control-planes.md) — using single-file HTTP services for agent webhooks, cron dashboards, and bounty repro harnesses.
+- [Agent Webhook Hardening With tiny-router](reports/2026-07-11-agent-webhook-hardening.md) — token checks, idempotency, health probes, and JSON errors for local agent callback servers.
 
 ## 📊 Comparison
 
