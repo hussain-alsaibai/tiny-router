@@ -112,7 +112,21 @@ See also:
 
 ```bash
 python test_tiny_router.py -v
+python examples/test_agent_callback_receiver.py -v
 ```
+
+## 📚 Recipes
+
+- **`examples/agent_callback_receiver.py`** — a hardened async-agent
+  webhook receiver. Shared-token auth, optional HMAC signature check,
+  payload schema validation, TTL-based delivery dedupe, sliding-window
+  rate limits per source, structured JSON logs with `x-request-id`
+  correlation, and `/health`, `/ready`, and `/status` endpoints. Runs
+  against the Python standard library only; once you've adopted
+  `tiny-validator`, `fast-cache`, `tiny-log`, and `tiny-rate`, the
+  inlined helpers drop away. See
+  [`reports/2026-07-13-callback-recipe-shipped.md`](reports/2026-07-13-callback-recipe-shipped.md)
+  for the design notes.
 
 ## 🛠️ API Reference
 
