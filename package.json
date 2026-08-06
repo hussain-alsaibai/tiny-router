@@ -1,0 +1,21 @@
+{
+  "name": "tiny-router",
+  "version": "0.2.0",
+  "description": "Zero-dependency HTTP router with path parameters, middleware chains, JSON helpers, and built-in stdlib server.",
+  "readme": "README.md",
+  "license": "MIT",
+  "keywords": ["http", "router", "middleware", "server", "rest", "wsgi"],
+  "authors": [{"name": "Hussain Alsaibai", "email": "hussain.alsaibai@gmail.com"}],
+  "repository": {"type": "git", "url": "https://github.com/hussain-alsaibai/tiny-router"},
+  "classifiers": [
+    "Development Status :: 4 - Beta",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12"
+  ],
+  "requiresPython": ">=3.8"
+}
