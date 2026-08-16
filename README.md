@@ -443,3 +443,90 @@ Part of the **tiny-*** zero-dependency toolkit for Python agent infrastructure:
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+## 🔧 Advanced: WebSocket Support
+
+```python
+from tiny_router import Router, WebSocket, serve
+
+app = Router()
+
+@app.websocket("/ws")
+def ws_echo(ws: WebSocket):
+    while True:
+        msg = ws.receive()
+        if msg is None:
+            break
+        ws.send(f"echo: {msg}")
+
+if __name__ == "__main__":
+    serve(app, host="0.0.0.0", port=8000)
+```
+
+## 🔧 Advanced: Middleware Chaining
+
+```python
+from tiny_router import Router, Request, Response
+
+app = Router()
+
+@app.middleware
+def timing_middleware(req: Request, next_handler):
+    import time
+    start = time.perf_counter()
+    resp = next_handler(req)
+    resp.headers["X-Process-Time"] = f"{time.perf_counter() - start:.3f}s"
+    return resp
+
+@app.middleware
+def auth_middleware(req: Request, next_handler):
+    if req.headers.get("Authorization") != "Bearer secret":
+        return Response(401, {"error": "Unauthorized"})
+    return next_handler(req)
+
+@app.get("/protected")
+def protected(req):
+    return {"secret": "data"}
+```
+
+## 🔧 Advanced: Sub-router Mounting
+
+```python
+from tiny_router import Router
+
+api = Router(prefix="/api/v1")
+
+@api.get("/users")
+def list_users(req): return {"users": []}
+
+@api.post("/users")
+def create_user(req): return {"id": 1}, 201
+
+main = Router()
+main.mount(api)  # /api/v1/* → api handlers
+
+serve(main)
+```
+
+## 🔧 Advanced: Error Handling
+
+```python
+from tiny_router import Router, Response, HTTPError
+
+app = Router()
+
+@app.on_error(HTTPError)
+def handle_http_error(req, exc: HTTPError):
+    return Response(exc.status, {"error": exc.message})
+
+@app.get("/items/{id}")
+def get_item(req, id):
+    item = db.get(int(id))
+    if not item:
+        raise HTTPError(404, "Item not found")
+    return item
+```
+
+---
+
+**Part of the [tiny-* ecosystem](https://github.com/hussain-alsaibai). MIT License.**
