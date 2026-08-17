@@ -1,11 +1,12 @@
 """tiny_router — zero-dependency HTTP router for Python.
 
 A single-file HTTP routing library with path parameters, middleware chains,
-CORS, streaming, static file serving, sub-routers, rate limiting, and
-a built-in WSGI server. No external packages required.
+CORS, streaming, static file serving, sub-routers, rate limiting, dependency
+injection, async handlers (v0.3.0+), and a built-in WSGI server.
+No external packages required.
 
 Usage:
-    from tiny_router import Router, Response, serve
+    from tiny_router import Router, Response, serve, Depends
 
     app = Router()
 
@@ -17,9 +18,22 @@ Usage:
     def user(req, id: str):
         return {"id": int(id)}
 
-    @app.post("/items")
-    def create(req):
-        return {"created": True}, 201
+    # Async handlers (v0.3.0+) — detected automatically
+    @app.get("/slow")
+    async def slow(req):
+        await asyncio.sleep(0.01)
+        return {"ok": True}
+
+    # Dependency injection (v0.3.0+) — FastAPI-style Depends()
+    def auth(req: Request) -> dict:
+        token = req.headers.get("authorization", "")
+        if not token:
+            raise HTTPError(401, "unauthorized")
+        return {"user": token}
+
+    @app.get("/me")
+    def me(req, user=Depends(auth)):
+        return user
 
     if __name__ == "__main__":
         serve(app, host="127.0.0.1", port=8000)
@@ -27,6 +41,8 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import json
 import os
 import re
@@ -37,7 +53,25 @@ from urllib.parse import parse_qs
 from pathlib import Path
 
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
+
+
+# ---------- Errors ----------
+
+
+class HTTPError(Exception):
+    """Exception raised by handlers/middleware to return an HTTP error response.
+
+    Example:
+        def handler(req):
+            raise HTTPError(404, "user not found")
+    """
+
+    def __init__(self, status: int, message: str = "", headers: dict[str, str] | None = None) -> None:
+        self.status = status
+        self.message = message or ""
+        self.headers = dict(headers or {})
+        super().__init__(f"{status} {message}")
 
 
 # ---------- Response ----------
@@ -85,10 +119,6 @@ class StreamingResponse:
                 for i in range(5):
                     yield f"chunk {i}\\n"
             return StreamingResponse(generate())
-
-    Usage with the built-in WSGI server (does not support streaming — falls
-    back to assembled body). Use with WSGI servers that support
-    start_response and a generator return value.
     """
 
     def __init__(
@@ -109,6 +139,95 @@ class StreamingResponse:
                 yield chunk
             else:
                 yield json.dumps(chunk, default=str).encode("utf-8")
+
+
+# ---------- Async support (v0.3.0) ----------
+
+
+class AsyncResponse:
+    """Marker wrapping an awaitable coroutine.
+
+    The router will `await` it instead of treating it as a sync return value.
+    Handlers can simply be `async def` — the router detects coroutine
+    functions automatically.
+    """
+    __slots__ = ("awaitable",)
+
+    def __init__(self, awaitable: Any) -> None:
+        self.awaitable = awaitable
+
+
+def _is_async_callable(fn: Callable) -> bool:
+    """Return True if fn is an async (coroutine) function."""
+    return inspect.iscoroutinefunction(fn)
+
+
+# ---------- Dependency injection (v0.3.0) ----------
+
+
+class Depends:
+    """Marker for a dependency that the router will resolve and inject.
+
+    FastAPI-style: pass Depends(callable) as a default argument to a handler.
+    The router inspects handler signatures, calls dependencies (which may also
+    have their own Depends), caches per-request results in `req.state`, and
+    passes the resolved values as kwargs.
+
+    Example:
+        def get_db(req: Request) -> DB:
+            return req.state["db"]
+
+        @app.get("/items")
+        def list_items(req, db=Depends(get_db)):
+            return db.query_all()
+    """
+
+    __slots__ = ("callable", "use_cache")
+
+    def __init__(self, callable: Callable, use_cache: bool = True) -> None:
+        self.callable = callable
+        self.use_cache = use_cache
+
+
+def _resolve_dependencies(
+    handler: Callable,
+    request: Request,
+) -> dict[str, Any]:
+    """Inspect handler signature, resolve Depends()-marked parameters.
+
+    Recursively resolves nested Depends() in dependency callables.
+
+    Returns a dict of {param_name: resolved_value} ready to splat into the
+    handler call. `req` and path params are excluded — handled separately.
+    """
+    sig = inspect.signature(handler)
+    resolved: dict[str, Any] = {}
+    dep_cache_key = f"_deps:{id(handler)}"
+    dep_cache: dict[int, Any] = request.state.setdefault(dep_cache_key, {})
+
+    for name, param in sig.parameters.items():
+        if name == "req" or name == "request":
+            continue
+        if param.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD):
+            continue
+        if isinstance(param.default, Depends):
+            dep = param.default
+            cache_id = id(dep.callable)
+            if dep.use_cache and cache_id in dep_cache:
+                resolved[name] = dep_cache[cache_id]
+            else:
+                # Recursively resolve nested Depends() in the dep's signature
+                nested = _resolve_dependencies(dep.callable, request)
+                # The dep itself receives (req, **nested)
+                value = dep.callable(request, **nested)
+                if dep.use_cache:
+                    dep_cache[cache_id] = value
+                resolved[name] = value
+        elif param.default is inspect.Parameter.empty:
+            # No default and not Depends — leave it; path params fill it later
+            pass
+
+    return resolved
 
 
 # ---------- Request ----------
@@ -211,11 +330,15 @@ def _compile_path(pattern: str) -> re.Pattern[str]:
 
 
 Handler = Callable[..., Any]
-Middleware = Callable[[Request, Callable[[Request], Response]], Response]
+Middleware = Callable[[Request, Callable[[Request], Any]], Any]
 
 
 class Router:
-    """A tiny HTTP router. Register handlers with @app.get/@app.post etc."""
+    """A tiny HTTP router. Register handlers with @app.get/@app.post etc.
+
+    v0.3.0: handlers may be sync or async; FastAPI-style `Depends()` is
+    supported for dependency injection.
+    """
 
     def __init__(self, prefix: str = "") -> None:
         self._routes: list[tuple[re.Pattern[str], str, Handler, list[str]]] = []
@@ -324,7 +447,10 @@ class Router:
     # ---- middleware ----
 
     def use(self, middleware: Middleware) -> "Router":
-        """Register a middleware. Order matters: outermost first."""
+        """Register a middleware. Order matters: outermost first.
+
+        v0.3.0: middleware may also be async.
+        """
         self._middlewares.append(middleware)
         return self
 
@@ -360,17 +486,17 @@ class Router:
 
     # ---- dispatch ----
 
-    def _dispatch(self, request: Request) -> Response:
-        # Apply middleware chain
-        def core(req: Request) -> Response:
+    def _dispatch(self, request: Request) -> Any:
+        # Apply middleware chain (sync path)
+        def core(req: Request) -> Any:
             return self._handle(req)
 
-        chain: Callable[[Request], Response] = core
+        chain: Callable[[Request], Any] = core
         for mw in reversed(self._middlewares):
             next_in_chain = chain
 
-            def make(m: Middleware, nxt: Callable[[Request], Response]) -> Middleware:
-                def wrapped(req: Request) -> Response:
+            def make(m: Middleware, nxt: Callable[[Request], Any]) -> Middleware:
+                def wrapped(req: Request) -> Any:
                     return m(req, nxt)
 
                 return wrapped
@@ -378,7 +504,18 @@ class Router:
             chain = make(mw, next_in_chain)
 
         try:
-            return chain(request)
+            result = chain(request)
+            # If anything in the chain returned a coroutine, run it.
+            if inspect.iscoroutine(result):
+                # Run the coroutine on a fresh loop (stdlib WSGI is sync).
+                return asyncio.run(result)
+            return result
+        except HTTPError as exc:
+            return Response(
+                {"error": exc.message} if exc.message else {"error": status_text(exc.status)},
+                status=exc.status,
+                headers=exc.headers,
+            )
         except Exception as exc:  # noqa: BLE001
             # Check type-specific error handlers first
             for exc_type, handler in self._error_middlewares.items():
@@ -390,7 +527,7 @@ class Router:
                 return self._normalize(self._error_handlers[status](request, exc))
             return Response({"error": str(exc)}, status=status)
 
-    def _handle(self, request: Request) -> Response:
+    def _handle(self, request: Request) -> Any:
         # Check mounted sub-routers first
         for prefix, sub_router in self._mounted_routers:
             if request.path.startswith(prefix + "/") or request.path == prefix:
@@ -425,7 +562,14 @@ class Router:
             match = pattern.match(request.path)
             if match:
                 request.params.update(match.groupdict())
-                return self._normalize(handler(request, **request.params))
+                # v0.3.0: resolve dependencies
+                resolved_deps = _resolve_dependencies(handler, request)
+                merged = {**resolved_deps, **request.params}
+                result = handler(request, **merged)
+                if inspect.iscoroutine(result):
+                    # Async handler: run on a fresh event loop.
+                    result = asyncio.run(result)
+                return self._normalize(result)
 
         if request.method == "OPTIONS":
             return Response(
@@ -504,6 +648,7 @@ class Router:
                     "pattern": pattern.pattern,
                     "handler": handler.__name__,
                     "tags": tags,
+                    "async": _is_async_callable(handler),
                 })
         return result
 
@@ -526,6 +671,9 @@ class Router:
 
         request = Request(method, path, query, headers, body)
         response = self._dispatch(request)
+
+        # _dispatch always returns a Response (async coros are run via asyncio.run)
+        assert isinstance(response, Response), "router did not produce a Response"
 
         if "content-type" not in {k.lower() for k in response.headers}:
             response.headers["content-type"] = "application/json"
@@ -668,6 +816,7 @@ _STATUS_TEXTS = {
     422: "Unprocessable Entity",
     429: "Too Many Requests",
     500: "Internal Server Error",
+    503: "Service Unavailable",
 }
 
 
@@ -697,6 +846,7 @@ def _make_handler(router: Router) -> type[BaseHTTPRequestHandler]:
                     body=body,
                 )
                 response = router._dispatch(request)
+                # _dispatch guarantees Response (async coros already awaited)
                 if "content-type" not in {k.lower() for k in response.headers}:
                     response.headers["content-type"] = "application/json"
                 self.send_response(response.status, status_text(response.status))
@@ -748,7 +898,7 @@ def serve(
     handler_cls = _make_handler(router)
     server_cls = ThreadingHTTPServer if threaded else BaseHTTPServer  # type: ignore[name-defined]
     httpd = server_cls((host, port), handler_cls)
-    print(f"tiny-router serving on http://{host}:{port} (Ctrl+C to stop)")
+    print(f"tiny-router v{__version__} serving on http://{host}:{port} (Ctrl+C to stop)")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -761,6 +911,9 @@ __all__ = [
     "Request",
     "Response",
     "StreamingResponse",
+    "AsyncResponse",
+    "Depends",
+    "HTTPError",
     "Middleware",
     "Handler",
     "cors",

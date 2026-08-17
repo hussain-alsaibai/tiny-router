@@ -28,7 +28,10 @@
 - **📦 JSON helpers** — `req.json` parses; dicts auto-serialize
 - **🔌 WSGI compliant** — drop it into any WSGI host
 - **🚀 Stdlib HTTP server** — `serve()` for instant local dev
-- **🪶 Tiny** — ~26 KB single file, zero deps
+- **⚡ Async handlers** *(v0.3.0)* — write `async def` handlers; the router awaits them
+- **🧬 `Depends()` injection** *(v0.3.0)* — FastAPI-style dependency injection with per-request caching
+- **🚨 `HTTPError` exception** *(v0.3.0)* — raise typed errors from handlers/deps
+- **🪶 Tiny** — ~32 KB single file, zero deps
 
 ## 🚀 Quick Start
 
@@ -61,6 +64,70 @@ pip install tiny-router
 ```
 
 Or just copy `tiny_router.py` into your project — it's a single file with zero dependencies.
+
+## ⚡ Async Handlers (v0.3.0)
+
+Use `async def` for handlers that do I/O — the router detects coroutine functions and awaits them automatically.
+
+```python
+import asyncio
+from tiny_router import Router
+
+app = Router()
+
+@app.get("/slow")
+async def slow(req):
+    await asyncio.sleep(0.01)  # e.g. async DB call, async HTTP fetch
+    return {"ok": True}
+```
+
+Async and sync handlers can coexist in the same app. Async middleware is also supported (just `async def` the middleware and `await nxt(req)`).
+
+## 🧬 Dependency Injection (v0.3.0)
+
+FastAPI-style `Depends()` for clean, testable handler signatures. Dependencies can themselves depend on other dependencies.
+
+```python
+from tiny_router import Router, Request, Depends, HTTPError
+
+app = Router()
+
+def get_db(req: Request) -> dict:
+    # Resolve from req.state (set by upstream middleware) or your DI container
+    return req.state.setdefault("db", {"connected": True})
+
+def require_user(req: Request) -> dict:
+    token = req.headers.get("authorization", "")
+    if not token:
+        raise HTTPError(401, "missing token")
+    return {"user": token[7:], "scopes": ["read", "write"]}
+
+@app.get("/me")
+def me(req, user=Depends(require_user)):
+    return user
+
+@app.get("/items")
+def list_items(req, db=Depends(get_db), user=Depends(require_user)):
+    return {"items": [], "by": user["user"], "db": db}
+```
+
+Per-request caching: within a single request, a dependency is resolved at most once even if multiple handlers reference it. Cross-request caching is opt-in via `Depends(fn, use_cache=False)` per call site.
+
+## 🚨 HTTPError (v0.3.0)
+
+Raise typed errors from handlers, dependencies, or middleware:
+
+```python
+from tiny_router import HTTPError
+
+@app.get("/items/{id}")
+def get_item(req, id):
+    if id == "0":
+        raise HTTPError(404, "item not found")
+    if id == "blocked":
+        raise HTTPError(403, "forbidden", headers={"Retry-After": "3600"})
+    return {"id": id}
+```
 
 ## 🧱 Middleware
 

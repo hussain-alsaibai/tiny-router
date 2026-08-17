@@ -743,7 +743,13 @@ class TestHelpers(unittest.TestCase):
 
     def test_version(self) -> None:
         from tiny_router import __version__
-        self.assertEqual(__version__, "0.2.0")
+        self.assertEqual(__version__, "0.3.0")
+
+    def test_depends_class_exists(self) -> None:
+        from tiny_router import Depends, HTTPError, AsyncResponse
+        self.assertTrue(callable(Depends))
+        self.assertTrue(issubclass(HTTPError, Exception))
+        self.assertIsNotNone(AsyncResponse)
 
 
 class TestIntegration(unittest.TestCase):
@@ -794,6 +800,153 @@ class TestIntegration(unittest.TestCase):
         # Route
         s, _h, b = _wsgi_call(app, "GET", "/api/status")
         self.assertEqual(json.loads(b), {"status": "running"})
+
+
+class TestAsyncHandlers(unittest.TestCase):
+    """v0.3.0: async def handlers are awaited automatically."""
+
+    def test_async_handler(self) -> None:
+        from tiny_router import Router, Request
+        import asyncio
+
+        app = Router()
+
+        @app.get("/slow")
+        async def slow(req: Request) -> dict:
+            await asyncio.sleep(0)
+            return {"ok": True, "kind": "async"}
+
+        s, _h, b = _wsgi_call(app, "GET", "/slow")
+        self.assertEqual(s, 200)
+        self.assertEqual(json.loads(b), {"ok": True, "kind": "async"})
+
+    def test_async_handler_error(self) -> None:
+        from tiny_router import Router, Request
+
+        app = Router()
+
+        @app.get("/boom")
+        async def boom(req: Request) -> dict:
+            raise ValueError("async-bang")
+
+        s, _h, b = _wsgi_call(app, "GET", "/boom")
+        self.assertEqual(s, 500)
+        self.assertIn("async-bang", json.loads(b)["error"])
+
+    def test_get_routes_reports_async(self) -> None:
+        from tiny_router import Router
+
+        app = Router()
+
+        @app.get("/sync")
+        def sync_h(req):  # type: ignore
+            return {}
+
+        @app.get("/asyn")
+        async def asyn_h(req):  # type: ignore
+            return {}
+
+        routes = app.get_routes()
+        by_handler = {r["handler"]: r for r in routes}
+        self.assertFalse(by_handler["sync_h"]["async"])
+        self.assertTrue(by_handler["asyn_h"]["async"])
+
+
+class TestDepends(unittest.TestCase):
+    """v0.3.0: FastAPI-style Depends() dependency injection."""
+
+    def test_simple_depends(self) -> None:
+        from tiny_router import Router, Request, Depends
+
+        app = Router()
+        calls = []
+
+        def get_user(req: Request) -> dict:
+            calls.append(req.headers.get("authorization"))
+            return {"name": "alice"}
+
+        @app.get("/me")
+        def me(req: Request, user=Depends(get_user)) -> dict:
+            return user
+
+        s, _h, b = _wsgi_call(app, "GET", "/me", headers={"authorization": "tok"})
+        self.assertEqual(s, 200)
+        self.assertEqual(json.loads(b), {"name": "alice"})
+        self.assertEqual(calls, ["tok"])
+
+    def test_depends_cached_per_request(self) -> None:
+        from tiny_router import Router, Request, Depends
+
+        app = Router()
+        calls = []
+
+        def expensive(req: Request) -> dict:
+            calls.append(1)
+            return {"expensive": True}
+
+        @app.get("/cached")
+        def handler(req: Request, x=Depends(expensive), y=Depends(expensive)) -> dict:
+            return {"x": x, "y": y}
+
+        s, _h, b = _wsgi_call(app, "GET", "/cached")
+        self.assertEqual(s, 200)
+        # expensive() should only have been called once per request
+        self.assertEqual(len(calls), 1)
+
+    def test_chained_depends(self) -> None:
+        from tiny_router import Router, Request, Depends
+
+        app = Router()
+
+        def base(req: Request) -> str:
+            return "base-value"
+
+        def derived(req: Request, b=Depends(base)) -> dict:
+            return {"derived_from": b}
+
+        @app.get("/chain")
+        def chain(req: Request, d=Depends(derived)) -> dict:
+            return d
+
+        s, _h, b = _wsgi_call(app, "GET", "/chain")
+        self.assertEqual(s, 200)
+        self.assertEqual(json.loads(b), {"derived_from": "base-value"})
+
+    def test_http_error_in_depends(self) -> None:
+        from tiny_router import Router, Request, Depends, HTTPError
+
+        app = Router()
+
+        def require_auth(req: Request) -> dict:
+            if not req.headers.get("authorization"):
+                raise HTTPError(401, "no auth")
+            return {"ok": True}
+
+        @app.get("/protected")
+        def protected(req: Request, _u=Depends(require_auth)) -> dict:
+            return {"ok": True}
+
+        s, _h, b = _wsgi_call(app, "GET", "/protected")
+        self.assertEqual(s, 401)
+        self.assertEqual(json.loads(b), {"error": "no auth"})
+
+    def test_async_handler_with_depends(self) -> None:
+        from tiny_router import Router, Request, Depends
+        import asyncio
+
+        app = Router()
+
+        def get_id(req: Request) -> str:
+            return "id-42"
+
+        @app.get("/items")
+        async def items(req: Request, item_id=Depends(get_id)) -> dict:
+            await asyncio.sleep(0)
+            return {"item_id": item_id}
+
+        s, _h, b = _wsgi_call(app, "GET", "/items")
+        self.assertEqual(s, 200)
+        self.assertEqual(json.loads(b), {"item_id": "id-42"})
 
 
 if __name__ == "__main__":
