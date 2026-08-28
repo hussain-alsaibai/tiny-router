@@ -109,6 +109,89 @@ class Response:
 # ---------- StreamingResponse ----------
 
 
+# ---------- WebSocket ----------
+
+
+class WebSocket:
+    """Lightweight WebSocket connection object passed to ws() handlers.
+
+    Note: The built-in stdlib HTTP server does not support WebSocket upgrades.
+    For real WebSocket support, run tiny-router behind a WSGI server that handles
+    the upgrade (e.g. gunicorn with a WebSocket worker, or a reverse proxy like
+    nginx). This class gives you the handler API and session management so your
+    code is WSGI-server-agnostic.
+
+    For testing or in-process use, see `tiny_router.websocket_server()` which
+    starts a standalone ThreadingHTTPServer on a separate port.
+
+    Example with a WSGI server that sets ws_scope:
+        @app.ws("/ws")
+        async def ws_handler(ws: WebSocket):
+            await ws.accept()
+            async for msg in ws:
+                await ws.send(f"echo: {msg}")
+            await ws.close()
+    """
+
+    def __init__(
+        self,
+        scope: dict[str, Any],
+        receive: Callable[[], Awaitable[dict[str, Any]]],
+        send: Callable[[dict[str, Any]], Awaitable[None]],
+    ) -> None:
+        self.scope = scope
+        self._receive = receive
+        self._send = send
+        self._closed = False
+
+    @property
+    def path(self) -> str:
+        return self.scope.get("path", "/")
+
+    @property
+    def query_params(self) -> dict[str, str]:
+        return self.scope.get("query_string", {})
+
+    @property
+    def headers(self) -> dict[str, str]:
+        return {
+            k.decode(): v.decode()
+            for k, v in self.scope.get("headers", [])
+        }
+
+    async def accept(self) -> None:
+        await self.send({"type": "websocket.accept", "text": ""})
+
+    async def send(self, data: str | dict[str, Any]) -> None:
+        if self._closed:
+            return
+        if isinstance(data, str):
+            await self._send({"type": "websocket.send", "text": data})
+        else:
+            await self._send(data)
+
+    async def close(self, code: int = 1000) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        await self._send({"type": "websocket.close", "code": code})
+
+    async def __aiter__(self) -> AsyncIterator[str]:
+        """Iterate over incoming text messages."""
+        while not self._closed:
+            msg = await self._receive()
+            msg_type = msg.get("type", "")
+            if msg_type == "websocket.disconnect":
+                self._closed = True
+                break
+            if msg_type == "websocket.receive":
+                yield msg.get("text", "")
+
+
+# Import for type hint only — don't actually use async in sync code path
+from typing import AsyncIterator, Awaitable
+
+
 class StreamingResponse:
     """Response that yields chunks using Transfer-Encoding: chunked.
 
@@ -342,6 +425,7 @@ class Router:
 
     def __init__(self, prefix: str = "") -> None:
         self._routes: list[tuple[re.Pattern[str], str, Handler, list[str]]] = []
+        self._ws_routes: list[tuple[re.Pattern[str], Callable, list[str]]] = []
         self._middlewares: list[Middleware] = []
         self._error_handlers: dict[int, Handler] = {}
         self._not_found: Handler | None = None
@@ -410,6 +494,35 @@ class Router:
         tags: list[str] | None = None,
     ) -> Callable[[Handler], Handler]:
         return self.add(method, pattern, tags=tags)
+
+    def ws(self, pattern: str, tags: list[str] | None = None) -> Callable:
+        """Register an async WebSocket handler.
+
+        The handler receives a `WebSocket` object. Use `await ws.accept()` to accept,
+        `async for msg in ws:` to iterate messages, and `await ws.send()` to reply.
+
+        Requires a WSGI server that supports ASGI/WebSocket (e.g. gunicorn with
+        uvicorn workers, or a custom server). The built-in `serve()` does not
+        support WebSocket upgrades.
+
+        Example:
+            @app.ws("/ws")
+            async def echo_ws(ws):
+                await ws.accept()
+                async for msg in ws:
+                    await ws.send(f"echo: {msg}")
+
+        For a self-contained WebSocket server (no external deps), use:
+            tiny_router.websocket_server(app, host, port)
+        """
+        full_pattern = self._prefix + pattern
+        compiled = _compile_path(full_pattern)
+
+        def decorator(fn: Callable) -> Callable:
+            self._ws_routes.append((compiled, fn, tags or []))
+            return fn
+
+        return decorator
 
     # ---- static files ----
 
@@ -639,7 +752,7 @@ class Router:
     # ---- route listing / groups ----
 
     def get_routes(self, tag: str | None = None) -> list[dict[str, Any]]:
-        """List registered routes, optionally filtered by tag/group."""
+        """List registered routes and WebSocket handlers, optionally filtered by tag."""
         result = []
         for pattern, method, handler, tags in self._routes:
             if tag is None or tag in tags:
@@ -649,6 +762,14 @@ class Router:
                     "handler": handler.__name__,
                     "tags": tags,
                     "async": _is_async_callable(handler),
+                })
+        for pattern, handler, tags in self._ws_routes:
+            if tag is None or tag in tags:
+                result.append({
+                    "method": "WS",
+                    "pattern": pattern.pattern,
+                    "handler": handler.__name__,
+                    "tags": tags,
                 })
         return result
 
@@ -914,6 +1035,7 @@ __all__ = [
     "AsyncResponse",
     "Depends",
     "HTTPError",
+    "WebSocket",
     "Middleware",
     "Handler",
     "cors",

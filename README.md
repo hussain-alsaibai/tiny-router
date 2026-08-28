@@ -31,6 +31,7 @@
 - **⚡ Async handlers** *(v0.3.0)* — write `async def` handlers; the router awaits them
 - **🧬 `Depends()` injection** *(v0.3.0)* — FastAPI-style dependency injection with per-request caching
 - **🚨 `HTTPError` exception** *(v0.3.0)* — raise typed errors from handlers/deps
+- **🔌 WebSocket handlers** — `@app.ws("/ws")` for real-time bidirectional communication
 - **🪶 Tiny** — ~32 KB single file, zero deps
 
 ## 🚀 Quick Start
@@ -56,6 +57,26 @@ def create(req):
 if __name__ == "__main__":
     serve(app, host="127.0.0.1", port=8000)
 ```
+
+## 🔌 WebSocket Handlers
+
+```python
+from tiny_router import Router, WebSocket, serve
+import asyncio
+
+app = Router()
+
+@app.ws("/ws")
+async def echo(ws: WebSocket):
+    await ws.accept()
+    async for msg in ws:
+        await ws.send(f"echo: {msg}")
+
+if __name__ == "__main__":
+    serve(app, host="127.0.0.1", port=8000)
+```
+
+> **Note:** The built-in `serve()` uses stdlib `http.server` which does not support WebSocket upgrades. For production WebSocket use, deploy behind a WSGI server (gunicorn with uvicorn workers, or nginx reverse proxy). The `WebSocket` class and `@app.ws()` decorator are API-compatible with ASGI deployment.
 
 ## 📦 Installation
 
