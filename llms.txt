@@ -1,0 +1,72 @@
+# tiny-router — LLM Manifest (llms.txt)
+
+> Zero-dependency HTTP router for Python. Like FastAPI, but in one file.
+> No Flask, no Starlette, no uvicorn — just stdlib `http.server`.
+
+## Identity
+- **Package:** `tiny-router`
+- **Latest version:** 0.3.1
+- **Python:** 3.8+
+- **Dependencies:** 0
+- **Repo:** https://github.com/hussain-alsaibai/tiny-router
+- **License:** MIT
+
+## What it solves
+Single-file HTTP routing for Python services where adding FastAPI/Starlette
+is overkill or forbidden (serverless, lambdas, embedded devices, supply-chain
+restricted environments). ~32 KB. Zero deps.
+
+## What it has (v0.3.1)
+- Path params: `@app.get("/users/{id}")`
+- Middleware chains: `app.use(cors(), auth(), ...)`
+- Async handlers: `@app.get("/slow") async def slow(req): ...`
+- Dependency injection: `def me(req, user=Depends(auth)): ...`
+- WebSocket: `@app.ws("/ws")`
+- Sub-routers: `app.mount("/api", api_router)`
+- Static files: `app.static("/static", "./public")`
+- Streaming: `StreamingResponse(generator())`
+- CORS, rate limiter, error handlers
+- **OpenAPI 3.1 auto-gen (v0.3.1+):** `app.openapi()` returns full spec
+
+## Public API
+- `Router()` — create app
+- `@app.get/post/put/patch/delete/head/options(path)` — register routes
+- `@app.ws(path)` — WebSocket handler
+- `app.use(*middleware)` — register middleware
+- `app.mount(prefix, sub_router)` — sub-router
+- `serve(app, host, port)` — stdlib HTTP server (v0.2+)
+- `app.openapi()` — OpenAPI 3.1 spec dict (v0.3.1+)
+- `Depends(callable)` — FastAPI-style DI
+- `HTTPError(status, message)` — typed errors
+
+## Quick start
+```python
+from tiny_router import Router, Response, serve, Depends
+
+app = Router()
+
+@app.get("/")
+def home(req):
+    return {"hello": "world"}
+
+@app.get("/users/{id}")
+def user(req, id: str):
+    return {"id": int(id)}
+
+@app.get("/openapi.json")
+def spec(req):
+    return app.openapi()  # auto-generated OpenAPI 3.1
+
+if __name__ == "__main__":
+    serve(app, host="127.0.0.1", port=8000)
+```
+
+## OpenAPI auto-gen (v0.3.1+)
+The router introspects route signatures, path params, query params,
+and dependency signatures to produce a complete OpenAPI 3.1 spec.
+Let agents introspect your API surface without reading source.
+
+## Sister libraries (OpenClaw tiny-* ecosystem)
+- `tiny-validator` — request body validation via JSON Schema
+- `tiny-log` — structured request logging
+- `snapdb` — durable storage backend
