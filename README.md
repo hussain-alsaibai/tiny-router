@@ -32,7 +32,10 @@
 - **🧬 `Depends()` injection** *(v0.3.0)* — FastAPI-style dependency injection with per-request caching
 - **🚨 `HTTPError` exception** *(v0.3.0)* — raise typed errors from handlers/deps
 - **🔌 WebSocket handlers** — `@app.ws("/ws")` for real-time bidirectional communication
-- **🪶 Tiny** — ~32 KB single file, zero deps
+- **🔐 JWT auth** *(v0.4.0)* — stdlib HS256 verifier + `jwt_auth()` middleware (no PyJWT)
+- **🆔 Request-ID middleware** *(v0.4.0)* — `request_id()` for distributed trace correlation
+- **📜 OpenAPI 3.1 export** *(v0.4.0)* — `openapi_spec(router)` turns routes into a spec dict
+- **🪶 Tiny** — ~36 KB single file, zero deps
 
 ## 🚀 Quick Start
 
@@ -618,3 +621,58 @@ def get_item(req, id):
 ---
 
 **Part of the [tiny-* ecosystem](https://github.com/hussain-alsaibai). MIT License.**
+
+## 🔐 JWT Authentication (v0.4.0)
+
+Stdlib HS256 verifier — no PyJWT required. Encodes/decodes tokens, validates `exp`/`nbf`/`aud`/`iss`, and ships as middleware.
+
+```python
+from tiny_router import Router, jwt_auth, Request
+import os
+
+app = Router()
+app.use(jwt_auth(secret=os.environ["JWT_SECRET"], audience="api.example.com"))
+
+@app.get("/me")
+def me(req: Request):
+    return {"sub": req.state["jwt"]["sub"]}  # claims attached automatically
+```
+
+For isolated verification (no middleware), use `jwt_decode(token, secret, ...)` / `jwt_encode(payload, secret)` directly.
+
+## 🆔 Request-ID Middleware (v0.4.0)
+
+Stamps every request with a correlation ID — propagates `x-request-id` if the client sent one, otherwise generates a fresh one and echoes it back.
+
+```python
+from tiny_router import Router, request_id
+app = Router()
+app.use(request_id())  # default header + generator
+
+@app.get("/users/{id}")
+def get_user(req):
+    return {"rid": req.state["request_id"]}
+```
+
+## 📜 OpenAPI 3.1 Export (v0.4.0)
+
+Turns registered routes into an OpenAPI 3.1-compatible JSON dict — useful for `curl localhost:8000/openapi.json` style docs, agent discovery, or `redoc-cli bundle`.
+
+```python
+from tiny_router import openapi_spec, serve
+import json
+
+app = Router()
+
+@app.get("/users/{id}", tags=["users"])
+def get_user(req, id):
+    return {"id": id}
+
+@app.get("/openapi.json")
+def spec(req):
+    return openapi_spec(app, title="Users API", version="1.0.0")
+
+serve(app, host="127.0.0.1", port=8000)
+```
+
+---

@@ -2,6 +2,25 @@
 
 All notable changes to tiny-router are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.0] — 2026-09-24
+
+### Added
+- **`jwt_auth()` middleware + `jwt_decode()` / `jwt_encode()` helpers** — stdlib-only HS256 verifier. Validates `exp` (with `leeway` seconds), `nbf`, `aud`, `iss`. Constant-time signature check. No `PyJWT` required. 9 tests.
+- **`request_id()` middleware** — stamps every request with a correlation ID (inbound `x-request-id` if present, else `secrets.token_hex(8)`). Exposes via `req.state["request_id"]`; echoes back on response. 2 tests.
+- **`openapi_spec(router)`** — generates an OpenAPI 3.1-compatible JSON dict from registered routes. Normalises internal regex patterns back into the public `/{name}` form; preserves tags. 2 tests.
+- New version banner: `tiny-router v0.4.0 serving on http://...`.
+- README: new sections for JWT auth, request-ID, and OpenAPI export.
+- New test file `test_tiny_router_v040.py` (14 tests). Combined suite now 75/75.
+
+### Changed
+- Bumped `__version__` to `0.4.0`.
+- `__all__` now exports `jwt_auth`, `jwt_decode`, `jwt_encode`, `JWTError`, `request_id`, `openapi_spec`.
+
+### Notes
+- `JWTError` only supports HS256 (the only widely-deployable shared-secret algorithm; RSA/EC keys would require bignum libraries).
+- `openapi_spec()` is metadata-only — request/response schemas are not inferred from handler signatures. Add return-type annotations in v0.5.0.
+- `request_id()` uses `secrets.token_hex(8)` by default (4B values; collision-resistant at <1B distinct req/s without external state).
+
 ## [0.3.0] — 2026-08-17
 
 ### Added

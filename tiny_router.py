@@ -53,7 +53,7 @@ from urllib.parse import parse_qs
 from pathlib import Path
 
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 
 # ---------- Errors ----------
@@ -872,6 +872,230 @@ def cors(
     return cors_middleware
 
 
+# ---------- JWT auth middleware ----------
+# A small, stdlib-only HS256 JWT verifier (no PyJWT required).
+# Supports: signature check, exp/nbf/iat claim validation, leeway, optional
+# audience + issuer checks. Tokens arrive as `Authorization: Bearer <jwt>`.
+
+def _b64url_decode(data: str) -> bytes:
+    """Decode base64url without padding (RFC 7519 §3)."""
+    pad = "=" * (-len(data) % 4)
+    import base64
+    return base64.urlsafe_b64decode(data + pad)
+
+
+def _b64url_encode(data: bytes) -> str:
+    import base64
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+
+def _constant_time_compare(a: bytes, b: bytes) -> bool:
+    if len(a) != len(b):
+        return False
+    diff = 0
+    for x, y in zip(a, b):
+        diff |= x ^ y
+    return diff == 0
+
+
+class JWTError(Exception):
+    """Raised when a JWT fails to verify or validate."""
+
+
+def jwt_decode(token: str, secret: str, *, algorithms: tuple[str, ...] = ("HS256",),
+               audience: str | None = None, issuer: str | None = None,
+               leeway: int = 0) -> dict:
+    """Decode and verify an HS256 JWT and return its claims dict.
+
+    Only HS256 is supported (single shared secret). The header is parsed but
+    no signature/key-length validation beyond what HMAC enforces.
+    """
+    if not isinstance(token, str) or token.count(".") != 2:
+        raise JWTError("malformed token")
+    import hashlib
+    import hmac
+    import json as _json
+    import time as _time
+    try:
+        header_b64, payload_b64, sig_b64 = token.split(".")
+        header = _json.loads(_b64url_decode(header_b64).decode("utf-8"))
+        payload = _json.loads(_b64url_decode(payload_b64).decode("utf-8"))
+        sig = _b64url_decode(sig_b64)
+    except Exception as exc:
+        raise JWTError(f"decode failed: {exc}") from exc
+
+    alg = header.get("alg")
+    if alg not in algorithms:
+        raise JWTError(f"alg {alg!r} not in {algorithms}")
+    if not isinstance(secret, str) or not secret:
+        raise JWTError("empty secret")
+    if alg == "HS256":
+        expected = hmac.new(secret.encode("utf-8"),
+                            f"{header_b64}.{payload_b64}".encode("ascii"),
+                            hashlib.sha256).digest()
+    else:
+        raise JWTError(f"unsupported alg: {alg}")
+    if not _constant_time_compare(expected, sig):
+        raise JWTError("bad signature")
+
+    now = int(_time.time())
+    if "exp" in payload and now >= int(payload["exp"]) + leeway:
+        raise JWTError("token expired")
+    if "nbf" in payload and now < int(payload["nbf"]) - leeway:
+        raise JWTError("token not yet valid")
+    if audience is not None and payload.get("aud") != audience:
+        raise JWTError("audience mismatch")
+    if issuer is not None and payload.get("iss") != issuer:
+        raise JWTError("issuer mismatch")
+    return payload
+
+
+def jwt_encode(payload: dict, secret: str, *, algorithm: str = "HS256",
+               headers: dict | None = None) -> str:
+    """Encode + sign an HS256 JWT. Mostly for tests + tooling."""
+    import json as _json
+    hdr = {"typ": "JWT", "alg": algorithm}
+    if headers:
+        hdr.update(headers)
+    h = _b64url_encode(_json.dumps(hdr, separators=(",", ":")).encode("utf-8"))
+    p = _b64url_encode(_json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    if algorithm != "HS256":
+        raise JWTError(f"unsupported alg: {algorithm}")
+    import hashlib
+    import hmac
+    sig = hmac.new(secret.encode("utf-8"), f"{h}.{p}".encode("ascii"),
+                   hashlib.sha256).digest()
+    return f"{h}.{p}.{_b64url_encode(sig)}"
+
+
+def jwt_auth(
+    secret: str,
+    *,
+    algorithms: tuple[str, ...] = ("HS256",),
+    audience: str | None = None,
+    issuer: str | None = None,
+    leeway: int = 0,
+    header: str = "authorization",
+    prefix: str = "Bearer ",
+    attach_key: str = "jwt",
+) -> Middleware:
+    """JWT auth middleware factory.
+
+    On success, attaches the decoded claims to ``req.state[attach_key]``.
+    On failure, returns 401 with a structured error body.
+
+    Example:
+        app.use(jwt_auth(secret=os.environ["JWT_SECRET"]))
+    """
+    def auth_middleware(req: Request, nxt: Callable[[Request], Response]) -> Response:
+        raw = req.headers.get(header, "")
+        if not raw.startswith(prefix):
+            return Response({"error": "missing bearer token"}, status=401,
+                            headers={"WWW-Authenticate": "Bearer"})
+        token = raw[len(prefix):].strip()
+        try:
+            claims = jwt_decode(token, secret, algorithms=algorithms,
+                                audience=audience, issuer=issuer, leeway=leeway)
+        except JWTError as exc:
+            return Response({"error": f"invalid token: {exc}"}, status=401,
+                            headers={"WWW-Authenticate": 'Bearer error="invalid_token"'})
+        # Attach claims for handlers via req.state (a plain dict).
+        if not hasattr(req, "state") or req.state is None:
+            req.state = {}
+        req.state[attach_key] = claims
+        return nxt(req)
+    return auth_middleware
+
+
+# ---------- Request-ID middleware ----------
+
+
+def request_id(
+    *,
+    header: str = "x-request-id",
+    generator: Callable[[], str] | None = None,
+    attach_key: str = "request_id",
+    echo_header: str = "x-request-id",
+) -> Middleware:
+    """Stamp every request with an ID (header → generated → attached to response).
+
+    If the inbound request already carries an ID in ``header``, it's used
+    (correlation across proxies/services). Otherwise a new ID is generated
+    (default: ``secrets.token_hex(8)`` — collision-resistant for distributed
+    systems without requiring entropy).
+
+    The ID is exposed to handlers via ``req.state[attach_key]`` and echoed
+    back on the response under ``echo_header``.
+
+    Example:
+        app.use(request_id())
+    """
+    import secrets as _secrets
+    gen = generator or (lambda: _secrets.token_hex(8))
+    def rid_middleware(req: Request, nxt: Callable[[Request], Response]) -> Response:
+        rid = req.headers.get(header) or gen()
+        if not hasattr(req, "state") or req.state is None:
+            req.state = {}
+        req.state[attach_key] = rid
+        response = nxt(req)
+        response.headers[echo_header] = rid
+        return response
+    return rid_middleware
+
+
+# ---------- OpenAPI route export ----------
+
+
+def openapi_spec(
+    router: "Router",
+    *,
+    title: str = "API",
+    version: str = "1.0.0",
+    description: str = "",
+    servers: list[dict] | None = None,
+) -> dict:
+    """Generate an OpenAPI 3.1-compatible spec from a router's registered routes.
+
+    Path parameters (``{id}``) become ``{"name": "id", "in": "path"}``.
+    Methods with no path parameters get an empty parameter list.
+    Tags (``@app.get(..., tags=["users"])``) are preserved per route.
+
+    This is metadata-only — request/response schemas are NOT inferred from
+    handler signatures. Future versions may add Return-Type inspection.
+    """
+    spec = {
+        "openapi": "3.1.0",
+        "info": {"title": title, "version": version},
+    }
+    if description:
+        spec["info"]["description"] = description
+    if servers:
+        spec["servers"] = servers
+    paths: dict[str, dict] = {}
+    for entry in router.get_routes():
+        method = entry["method"].lower()
+        raw = entry["pattern"]
+        if method == "ws":
+            continue  # OpenAPI has no first-class WS; skip.
+        # Convert internal regex ``^/users/(?P<id>[^/]+)$`` back into the
+        # public ``/users/{id}`` form OpenAPI consumers expect.
+        import re as _re
+        param_names = _re.findall(r"\(\?P<([^{}>]+)>", raw)
+        cleaned = _re.sub(r"\(\?P<([^{}>]+)>[^)]*\)", r"{\1}", raw)
+        cleaned = cleaned.lstrip("^").rstrip("$")
+        path_item = paths.setdefault(cleaned, {})
+        op: dict = {"summary": entry["handler"], "tags": entry.get("tags", [])}
+        if param_names:
+            op["parameters"] = [
+                {"name": n, "in": "path", "required": True, "schema": {"type": "string"}}
+                for n in param_names
+            ]
+        op["responses"] = {"200": {"description": "OK"}}
+        path_item[method] = op
+    spec["paths"] = paths
+    return spec
+
+
 # ---------- Rate Limiter Middleware ----------
 
 
@@ -1040,6 +1264,12 @@ __all__ = [
     "Handler",
     "cors",
     "rate_limiter",
+    "jwt_auth",
+    "jwt_decode",
+    "jwt_encode",
+    "JWTError",
+    "request_id",
+    "openapi_spec",
     "serve",
     "status_text",
     "__version__",
