@@ -2,6 +2,24 @@
 
 All notable changes to tiny-router are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] — 2026-09-25
+
+### Added
+- **`openapi_endpoint(router, *, path="/openapi.json")`** — registers a built-in route that serves the generated `openapi_spec(router)` as JSON with `Content-Type: application/json; charset=utf-8` and `Cache-Control: no-store`. Configurable `path=`, `methods=`, `title=`, `version=`, `description=`, `servers=`. One call replaces the boilerplate of mounting a static OpenAPI file. 4 tests.
+- **`jwt_refresh_pair(access_payload, refresh_payload, *, secret, access_ttl_seconds=900, refresh_ttl_seconds=2_592_000)`** — mints a paired access + refresh JWT and returns a dict ready to JSON-serialize as a token endpoint response. Caller-supplied `iat` / `exp` are overwritten so callers can't mint eternal tokens; refresh carries `typ=refresh` automatically. 4 tests.
+- **`jwt_refresh_exchange(refresh_token, *, secret, access_ttl_seconds=900)`** — validates a refresh token (signature, exp, aud, iss, typ=refresh), then re-mints an access token whose claims are the refresh token's claims minus `typ`. Enforces `typ=refresh` so an attacker can't exchange a leaked access token for a fresh one. 6 tests.
+- README: new section on `/openapi.json` endpoint + JWT refresh flow.
+- New test file `test_tiny_router_v050.py` (15 tests). Combined suite now 101/101.
+
+### Changed
+- Bumped `__version__` to `0.5.0`.
+- `__all__` now exports `openapi_endpoint`, `jwt_refresh_pair`, `jwt_refresh_exchange`.
+- `test_version` test updated to `0.5.0`.
+
+### Notes
+- `jwt_refresh_exchange` requires `leeway=0` by default. Pass a positive leeway only if you understand the trade-off (clock-skew tolerance can mask revoked tokens).
+- `openapi_endpoint` emits `Cache-Control: no-store` because every reload adds new routes — clients should always re-fetch.
+
 ## [0.4.0] — 2026-09-24
 
 ### Added

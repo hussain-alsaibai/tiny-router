@@ -53,7 +53,7 @@ from urllib.parse import parse_qs
 from pathlib import Path
 
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 
 # ---------- Errors ----------
@@ -1096,6 +1096,174 @@ def openapi_spec(
     return spec
 
 
+# ---------- Built-in /openapi.json endpoint ----------
+
+
+def openapi_endpoint(
+    router: "Router",
+    *,
+    title: str = "API",
+    version: str = "1.0.0",
+    description: str = "",
+    servers: list[dict] | None = None,
+    path: str = "/openapi.json",
+    methods: tuple[str, ...] = ("GET",),
+) -> None:
+    """Register a built-in route that serves ``openapi_spec()`` as JSON.
+
+    Wires the result of ``openapi_spec(router)`` directly onto the router,
+    so serving API docs is one decorator. The route emits ``Cache-Control:
+    no-store`` because every reload adds new routes.
+
+    Example:
+        app = Router()
+        # ... add routes ...
+        openapi_endpoint(app, title="My Service", version="2.1.0")
+    """
+    spec = openapi_spec(
+        router,
+        title=title,
+        version=version,
+        description=description,
+        servers=servers,
+    )
+    payload = json.dumps(spec, sort_keys=True).encode("utf-8")
+
+    def handler(req: Request) -> Response:
+        return Response(
+            payload,
+            status=200,
+            headers={
+                "content-type": "application/json; charset=utf-8",
+                "cache-control": "no-store",
+            },
+        )
+
+    for method in methods:
+        # Use ``router.add`` directly so we don't confuse positional vs
+        # decorator-form (``get(pattern, handler)`` would bind handler as
+        # ``tags`` and silently leave the route unregistered).
+        router.add(method, path)(handler)
+
+
+# ---------- JWT refresh-token helper ----------
+
+
+def jwt_refresh_pair(
+    access_payload: dict,
+    refresh_payload: dict,
+    *,
+    secret: str,
+    access_ttl_seconds: int = 900,
+    refresh_ttl_seconds: int = 60 * 60 * 24 * 30,
+    now: int | None = None,
+) -> dict:
+    """Mint a paired access + refresh JWT.
+
+    The access token carries short-lived claims (default 15 min); the refresh
+    token carries a longer-lived ``typ=refresh`` marker (default 30 days).
+    Returns a dict ready to JSON-serialize as a token endpoint response.
+
+    Args:
+        access_payload: Claims to embed in the access token. ``exp`` and
+            ``iat`` are set/overwritten automatically.
+        refresh_payload: Claims to embed in the refresh token. ``typ`` is
+            set to ``"refresh"`` automatically (overwriting any user value);
+            ``exp`` and ``iat`` are set/overwritten automatically.
+        secret: HS256 shared secret.
+        access_ttl_seconds: Access-token lifetime. Default: 900 (15 min).
+        refresh_ttl_seconds: Refresh-token lifetime. Default: 2_592_000 (30 days).
+        now: Override the current epoch second (testing only). Default: ``time.time()``.
+
+    Returns:
+        ``{"access_token": "...", "refresh_token": "...",
+           "token_type": "Bearer", "expires_in": access_ttl_seconds}``
+
+    Example:
+        body = jwt_refresh_pair(
+            {"sub": "u-1", "scope": "read write"},
+            {"sub": "u-1"},
+            secret=SECRET,
+        )
+        return Response(body, status=200)
+    """
+    now_i = int(now if now is not None else time.time())
+    access_claims = dict(access_payload)
+    access_claims["iat"] = now_i
+    access_claims["exp"] = now_i + int(access_ttl_seconds)
+    refresh_claims = dict(refresh_payload)
+    refresh_claims["typ"] = "refresh"
+    refresh_claims["iat"] = now_i
+    refresh_claims["exp"] = now_i + int(refresh_ttl_seconds)
+    return {
+        "access_token": jwt_encode(access_claims, secret),
+        "refresh_token": jwt_encode(refresh_claims, secret),
+        "token_type": "Bearer",
+        "expires_in": int(access_ttl_seconds),
+    }
+
+
+def jwt_refresh_exchange(
+    refresh_token: str,
+    *,
+    secret: str,
+    audience: str | None = None,
+    issuer: str | None = None,
+    leeway: int = 0,
+    access_ttl_seconds: int = 900,
+    now: int | None = None,
+) -> dict:
+    """Validate a refresh token and mint a fresh access token.
+
+    Verifies the refresh token's signature and standard claims, confirms
+    its ``typ`` is ``"refresh"``, then re-mints an access token whose
+    claims are the refresh token's claims minus the ``typ`` marker.
+
+    Args:
+        refresh_token: Encoded JWT previously issued as a refresh token.
+        secret: HS256 shared secret.
+        audience: Optional audience claim to enforce.
+        issuer: Optional issuer claim to enforce.
+        leeway: Clock-skew tolerance in seconds.
+        access_ttl_seconds: Lifetime of the freshly minted access token.
+        now: Override the current epoch second (testing only). Default: ``time.time()``.
+
+    Returns:
+        ``{"access_token": "...", "token_type": "Bearer",
+           "expires_in": access_ttl_seconds}``
+
+    Raises:
+        JWTError: if the token is malformed, has a bad signature, has
+            expired, has the wrong audience/issuer, or has ``typ !=
+            "refresh"``.
+
+    Example:
+        @app.post("/auth/refresh")
+        def refresh(req: Request) -> Response:
+            body = json.loads(req.body or b"{}")
+            return Response(jwt_refresh_exchange(
+                body["refresh_token"], secret=SECRET))
+    """
+    claims = jwt_decode(
+        refresh_token,
+        secret,
+        audience=audience,
+        issuer=issuer,
+        leeway=leeway,
+    )
+    if claims.get("typ") != "refresh":
+        raise JWTError("not a refresh token")
+    new_access = {k: v for k, v in claims.items() if k != "typ"}
+    now_i = int(now if now is not None else time.time())
+    new_access["iat"] = now_i
+    new_access["exp"] = now_i + int(access_ttl_seconds)
+    return {
+        "access_token": jwt_encode(new_access, secret),
+        "token_type": "Bearer",
+        "expires_in": int(access_ttl_seconds),
+    }
+
+
 # ---------- Rate Limiter Middleware ----------
 
 
@@ -1267,9 +1435,12 @@ __all__ = [
     "jwt_auth",
     "jwt_decode",
     "jwt_encode",
+    "jwt_refresh_pair",
+    "jwt_refresh_exchange",
     "JWTError",
     "request_id",
     "openapi_spec",
+    "openapi_endpoint",
     "serve",
     "status_text",
     "__version__",

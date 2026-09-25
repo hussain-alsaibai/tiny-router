@@ -743,7 +743,7 @@ class TestHelpers(unittest.TestCase):
 
     def test_version(self) -> None:
         from tiny_router import __version__
-        self.assertEqual(__version__, "0.4.0")
+        self.assertEqual(__version__, "0.5.0")
 
     def test_depends_class_exists(self) -> None:
         from tiny_router import Depends, HTTPError, AsyncResponse

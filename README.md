@@ -35,6 +35,8 @@
 - **🔐 JWT auth** *(v0.4.0)* — stdlib HS256 verifier + `jwt_auth()` middleware (no PyJWT)
 - **🆔 Request-ID middleware** *(v0.4.0)* — `request_id()` for distributed trace correlation
 - **📜 OpenAPI 3.1 export** *(v0.4.0)* — `openapi_spec(router)` turns routes into a spec dict
+- **📡 Built-in /openapi.json endpoint** *(v0.5.0)* — one-call `openapi_endpoint(router)` serves the spec as JSON
+- **🔁 JWT refresh pair + exchange** *(v0.5.0)* — stdlib-only HS256 with `typ=refresh` enforcement
 - **🪶 Tiny** — ~36 KB single file, zero deps
 
 ## 🚀 Quick Start
@@ -464,6 +466,11 @@ Yields chunks from a generator. Strings, bytes, and dicts are auto-serialized.
 |---|---|
 | `cors(allow_origins, ...)` | CORS headers and preflight |
 | `rate_limiter(max_requests, window_seconds, key_func)` | Token-bucket rate limiter |
+| `jwt_auth(secret, *, audience=None, issuer=None, leeway=0, ...)` | HS256 bearer-token middleware |
+| `request_id(*, header='x-request-id', generator=None, ...)` | Per-request correlation ID |
+| `openapi_endpoint(router, *, path='/openapi.json', methods=('GET',))` | Register `/openapi.json` route |
+| `jwt_refresh_pair(access, refresh, *, secret, access_ttl_seconds=900, refresh_ttl_seconds=2_592_000)` | Mint paired access + refresh JWTs |
+| `jwt_refresh_exchange(refresh_token, *, secret, audience=None, issuer=None, leeway=0)` | Verify refresh, mint fresh access |
 
 ## 📊 Comparison
 
