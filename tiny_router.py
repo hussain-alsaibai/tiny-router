@@ -53,7 +53,7 @@ from urllib.parse import parse_qs
 from pathlib import Path
 
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 
 # ---------- Errors ----------
@@ -556,6 +556,221 @@ class Router:
             sub_router._prefix = prefix
         self._mounted_routers.append((prefix, sub_router))
         return self
+
+    # ---- declarative blueprints (v0.6.0) ----
+
+    @classmethod
+    def from_blueprint(
+        cls,
+        blueprint: "Blueprint | list[Blueprint]",
+        *,
+        handlers: "dict[str, Handler] | None" = None,
+        prefix: str = "",
+    ) -> "Router":
+        """Build a Router from a declarative blueprint dict (or list of dicts).
+
+        A blueprint is a JSON/YAML-friendly description of routes, static
+        files, and sub-mounts. The actual handler functions are passed in
+        via the ``handlers`` dict, keyed by name. This separation lets you
+        externalize the route table in config without committing code:
+
+        Example blueprint (YAML or JSON, same shape)::
+
+            routes:
+              - method: GET
+                path: /users/{id}
+                handler: get_user
+                tags: [users]
+              - method: POST
+                path: /users
+                handler: create_user
+            static:
+              - prefix: /static
+                directory: ./public
+            mount:
+              - prefix: /api/v1
+                blueprint: <nested blueprint>
+
+        Handlers dict (Python)::
+
+            def get_user(req, id):
+                return {"id": id}
+
+            def create_user(req):
+                return {"created": True}
+
+            app = Router.from_blueprint(
+                blueprint_dict,
+                handlers={"get_user": get_user, "create_user": create_user},
+            )
+
+        Args:
+            blueprint: A single blueprint dict or a list of dicts.
+                Each dict has keys ``routes`` (list), ``static`` (list, optional),
+                ``mount`` (list, optional), and ``middleware`` (list, optional).
+            handlers: Mapping from handler name to callable. Required for any
+                route whose ``handler`` key isn't already a callable.
+            prefix: Mount prefix for the new Router.
+
+        Returns:
+            A new :class:`Router` with the routes registered.
+
+        Raises:
+            ValueError: if a route references a handler that isn't in the
+                ``handlers`` dict and isn't itself a callable.
+        """
+        if isinstance(blueprint, list):
+            # Concatenate multiple blueprints into a single Router.
+            router = cls(prefix=prefix)
+            for sub_bp in blueprint:
+                sub = cls.from_blueprint(sub_bp, handlers=handlers, prefix=prefix)
+                # Merge sub.routes / sub.static_routes / sub.mounted_routers
+                # into the parent. We do this by reaching into private state
+                # because the public API (mount) requires a separate Router,
+                # but blueprint merging is the documented use case.
+                router._routes.extend(sub._routes)
+                router._static_routes.extend(sub._static_routes)
+                router._mounted_routers.extend(sub._mounted_routers)
+                router._ws_routes.extend(sub._ws_routes)
+                router._middlewares.extend(sub._middlewares)
+                router._error_handlers.update(sub._error_handlers)
+                router._error_middlewares.update(sub._error_middlewares)
+            return router
+
+        if not isinstance(blueprint, dict):
+            raise ValueError("blueprint must be a dict or list of dicts")
+
+        router = cls(prefix=prefix)
+        if handlers is None:
+            handlers = {}
+
+        for route in blueprint.get("routes", []) or []:
+            method = route["method"].upper()
+            path = route["path"]
+            tags = route.get("tags", [])
+            handler = route.get("handler")
+            if handler is None:
+                raise ValueError(f"route {method} {path!r}: missing handler key")
+            if callable(handler):
+                # Handler is already a callable (in-line).
+                fn = handler
+            elif isinstance(handler, str):
+                if handler not in handlers:
+                    raise ValueError(
+                        f"route {method} {path!r}: handler {handler!r} not found "
+                        f"in handlers dict (got keys: {sorted(handlers)})"
+                    )
+                fn = handlers[handler]
+            else:
+                raise ValueError(
+                    f"route {method} {path!r}: handler must be a string name or callable"
+                )
+            # Register via the public add() so behavior is identical to
+            # decorator-style usage.
+            router.add(method, path, tags=list(tags))(fn)
+
+        for ws_route in blueprint.get("ws_routes", []) or []:
+            path = ws_route["path"]
+            tags = ws_route.get("tags", [])
+            handler = ws_route.get("handler")
+            if handler is None:
+                raise ValueError(f"ws route {path!r}: missing handler key")
+            if callable(handler):
+                fn = handler
+            elif isinstance(handler, str):
+                if handler not in handlers:
+                    raise ValueError(
+                        f"ws route {path!r}: handler {handler!r} not found "
+                        f"in handlers dict (got keys: {sorted(handlers)})"
+                    )
+                fn = handlers[handler]
+            else:
+                raise ValueError(
+                    f"ws route {path!r}: handler must be a string name or callable"
+                )
+            router.ws(path, tags=list(tags))(fn)
+
+        for static in blueprint.get("static", []) or []:
+            router.static(static["prefix"], static["directory"])
+
+        for mount_entry in blueprint.get("mount", []) or []:
+            sub_prefix = mount_entry["prefix"]
+            sub_blueprint = mount_entry.get("blueprint", {})
+            sub_router = cls.from_blueprint(
+                sub_blueprint, handlers=handlers, prefix=sub_prefix,
+            )
+            router.mount(sub_prefix, sub_router)
+
+        # Middleware: list of strings (callable names) — handlers dict may
+        # include middleware factories as values.
+        for mw in blueprint.get("middleware", []) or []:
+            if callable(mw):
+                router.use(mw() if isinstance(mw, type) else mw)
+            elif isinstance(mw, str):
+                if mw not in handlers:
+                    raise ValueError(
+                        f"middleware {mw!r} not found in handlers dict"
+                    )
+                mw_obj = handlers[mw]
+                router.use(mw_obj() if isinstance(mw_obj, type) else mw_obj)
+
+        return router
+
+    @classmethod
+    def from_yaml(
+        cls,
+        path: "str | Path",
+        *,
+        handlers: "dict[str, Handler] | None" = None,
+        prefix: str = "",
+        yaml_loader: "Callable | None" = None,
+    ) -> "Router":
+        """Build a Router from a YAML file containing one or more blueprints.
+
+        Requires PyYAML to be installed. If PyYAML is missing, raises
+        :class:`ImportError` with a clear message. ``yaml_loader`` may be
+        passed to use a custom loader (e.g. ``yaml.SafeLoader``); the
+        default uses ``yaml.SafeLoader`` for security.
+
+        Example::
+
+            app = Router.from_yaml(
+                "routes.yaml",
+                handlers={"get_user": get_user, "create_user": create_user},
+            )
+        """
+        try:
+            import yaml  # type: ignore
+        except ImportError as exc:
+            raise ImportError(
+                "Router.from_yaml requires PyYAML. Install with `pip install pyyaml` "
+                "or use Router.from_json / Router.from_blueprint directly."
+            ) from exc
+
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.load(f, Loader=yaml_loader or yaml.SafeLoader)
+        return cls.from_blueprint(data, handlers=handlers, prefix=prefix)
+
+    @classmethod
+    def from_json(
+        cls,
+        path: "str | Path",
+        *,
+        handlers: "dict[str, Handler] | None" = None,
+        prefix: str = "",
+    ) -> "Router":
+        """Build a Router from a JSON file containing one or more blueprints.
+
+        Example::
+
+            app = Router.from_json(
+                "routes.json",
+                handlers={"get_user": get_user},
+            )
+        """
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return cls.from_blueprint(data, handlers=handlers, prefix=prefix)
 
     # ---- middleware ----
 

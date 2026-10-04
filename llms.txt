@@ -5,7 +5,7 @@
 
 ## Identity
 - **Package:** `tiny-router`
-- **Latest version:** 0.3.1
+- **Latest version:** 0.5.0
 - **Python:** 3.8+
 - **Dependencies:** 0
 - **Repo:** https://github.com/hussain-alsaibai/tiny-router
@@ -14,9 +14,9 @@
 ## What it solves
 Single-file HTTP routing for Python services where adding FastAPI/Starlette
 is overkill or forbidden (serverless, lambdas, embedded devices, supply-chain
-restricted environments). ~32 KB. Zero deps.
+restricted environments). ~36 KB. Zero deps.
 
-## What it has (v0.3.1)
+## What it has (v0.5.0)
 - Path params: `@app.get("/users/{id}")`
 - Middleware chains: `app.use(cors(), auth(), ...)`
 - Async handlers: `@app.get("/slow") async def slow(req): ...`
@@ -26,47 +26,59 @@ restricted environments). ~32 KB. Zero deps.
 - Static files: `app.static("/static", "./public")`
 - Streaming: `StreamingResponse(generator())`
 - CORS, rate limiter, error handlers
-- **OpenAPI 3.1 auto-gen (v0.3.1+):** `app.openapi()` returns full spec
+- **JWT auth middleware (v0.4.0+)** — stdlib-only HS256 with `aud`/`iss`/`exp`/`nbf` validation, constant-time signature check
+- **Request-ID middleware (v0.4.0+)** — inbound `x-request-id` honored, else `secrets.token_hex(8)` generated
+- **OpenAPI 3.1 export (v0.4.0+)** — `openapi_spec(router)` returns a complete spec dict
+- **Built-in `/openapi.json` endpoint (v0.5.0+)** — `openapi_endpoint(router)` registers the route for you
+- **JWT refresh pair + exchange (v0.5.0+)** — `jwt_refresh_pair()` mints paired tokens; `jwt_refresh_exchange()` verifies and rotates
 
-## Public API
+## Public API (v0.5.0)
 - `Router()` — create app
-- `@app.get/post/put/patch/delete/head/options(path)` — register routes
+- `@app.get/post/put/patch/delete/head/options(path, tags=[])` — register routes
 - `@app.ws(path)` — WebSocket handler
 - `app.use(*middleware)` — register middleware
 - `app.mount(prefix, sub_router)` — sub-router
-- `serve(app, host, port)` — stdlib HTTP server (v0.2+)
-- `app.openapi()` — OpenAPI 3.1 spec dict (v0.3.1+)
+- `serve(app, host, port)` — stdlib HTTP server
+- `openapi_spec(router, *, title, version, description, servers)` — generate OpenAPI 3.1 spec dict
+- `openapi_endpoint(router, *, path='/openapi.json', methods=('GET',))` — register the built-in endpoint
+- `jwt_auth(secret, *, audience=None, issuer=None, leeway=0, prefix='Bearer ')` — HS256 middleware
+- `jwt_decode(token, secret, *, audience=None, issuer=None, leeway=0)` — verify and decode
+- `jwt_encode(payload, secret, *, algorithm='HS256')` — sign a JWT
+- `jwt_refresh_pair(access_payload, refresh_payload, *, secret, access_ttl_seconds=900, refresh_ttl_seconds=2_592_000)` — mint paired tokens
+- `jwt_refresh_exchange(refresh_token, *, secret, audience=None, issuer=None, leeway=0)` — verify refresh, mint fresh access
+- `request_id(*, header='x-request-id', generator=None)` — correlation-ID middleware
 - `Depends(callable)` — FastAPI-style DI
 - `HTTPError(status, message)` — typed errors
 
 ## Quick start
 ```python
-from tiny_router import Router, Response, serve, Depends
+from tiny_router import Router, Response, serve, Depends, jwt_auth, openapi_endpoint
 
 app = Router()
+app.use(jwt_auth(secret="super-secret"))  # protect everything
 
 @app.get("/")
 def home(req):
     return {"hello": "world"}
 
 @app.get("/users/{id}")
-def user(req, id: str):
-    return {"id": int(id)}
+def user(req, id: str, jwt=__import__("tiny_router").jwt_decode if False else None):
+    return {"id": int(id), "sub": req.state["jwt"]["sub"]}
 
-@app.get("/openapi.json")
-def spec(req):
-    return app.openapi()  # auto-generated OpenAPI 3.1
+openapi_endpoint(app, title="My Service", version="1.0.0")
 
 if __name__ == "__main__":
     serve(app, host="127.0.0.1", port=8000)
 ```
 
-## OpenAPI auto-gen (v0.3.1+)
-The router introspects route signatures, path params, query params,
-and dependency signatures to produce a complete OpenAPI 3.1 spec.
-Let agents introspect your API surface without reading source.
+## JWT refresh flow (v0.5.0+)
+1. `POST /auth/login` → returns `{"access_token", "refresh_token", "token_type", "expires_in"}` from `jwt_refresh_pair(...)`
+2. Caller uses `access_token` as `Authorization: Bearer <token>`
+3. When the access token expires (default 15 min), `POST /auth/refresh` with the `refresh_token` → `jwt_refresh_exchange(...)` mints a new access token
 
 ## Sister libraries (OpenClaw tiny-* ecosystem)
 - `tiny-validator` — request body validation via JSON Schema
-- `tiny-log` — structured request logging
+- `tiny-log` — structured request logging with secret masking
+- `tiny-secret-mask` — redact secrets from responses before logging
 - `snapdb` — durable storage backend
+- `tiny-llm-router` — LLM dispatch with budget caps

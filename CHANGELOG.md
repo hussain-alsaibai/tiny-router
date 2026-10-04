@@ -2,6 +2,22 @@
 
 All notable changes to tiny-router are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] — 2026-10-04
+
+### Added
+- **`Router.from_blueprint(blueprint, *, handlers=None, prefix="")`** — declarative route registration from a dict (or list of dicts). Build a Router from a JSON/YAML-friendly description of routes, static files, sub-mounts, and middleware, with handler callables resolved from a separate `handlers` dict. Supports inline callables, named-handler strings, nested blueprints (via `mount`), static file dirs, middleware registration, and tag preservation. New test file `test_v060_blueprint.py` (16 tests).
+- **`Router.from_json(path, *, handlers=None, prefix="")`** — convenience constructor: read a JSON file and call `from_blueprint`. Pure stdlib, no PyYAML dependency.
+- **`Router.from_yaml(path, *, handlers=None, prefix="", yaml_loader=None)`** — same shape for YAML; lazy-imports PyYAML and raises a clear `ImportError` if missing. Defaults to `yaml.SafeLoader` for safety.
+
+### Changed
+- Bumped `__version__` to `0.6.0`.
+- `test_version` updated to `0.6.0`. Combined suite now 77/77 (61 existing + 16 new).
+
+### Notes
+- Blueprint list-merging reaches into `Router._routes` / `_static_routes` / `_mounted_routers` / `_ws_routes` / `_middlewares` / `_error_handlers` / `_error_middlewares`. This is the documented escape hatch; future versions may expose it as `Router.merge(other)`.
+- `from_yaml` does not bundle a YAML parser; install PyYAML as an optional dep (`pip install pyyaml`) to enable it. The JSON path is the always-available default.
+- `from_blueprint` accepts `handler` as either a string (looked up in `handlers` dict) or a callable (in-line). This matches the two patterns the ecosystem has converged on: type-annotated YAML configs + Python handler dicts for static analysis, and dynamic plugin loaders that pass callables directly.
+
 ## [0.5.0] — 2026-09-25
 
 ### Added
