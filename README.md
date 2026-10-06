@@ -8,7 +8,7 @@
 [![Part of the tiny-* ecosystem](https://img.shields.io/badge/tiny--*-ecosystem-purple.svg)](#ecosystem)
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)](.github/workflows/ci.yml)
 [![Benchmark](https://img.shields.io/badge/benchmark-76K%20req%2Fs-blueviolet)](benchmark.py)
-[![Version](https://img.shields.io/badge/version-0.2.0-blue.svg)](tiny_router.py)
+[![Version](https://img.shields.io/badge/version-0.7.0-blue.svg)](tiny_router.py)
 
 `tiny-router` is a single-file HTTP router with path parameters, middleware chains, CORS, streaming, static file serving, sub-routers, rate limiting, JSON helpers, and a built-in stdlib server. Pure Python standard library — no Flask, no FastAPI, no Starlette, no uvicorn.
 
@@ -37,6 +37,7 @@
 - **📜 OpenAPI 3.1 export** *(v0.4.0)* — `openapi_spec(router)` turns routes into a spec dict
 - **📡 Built-in /openapi.json endpoint** *(v0.5.0)* — one-call `openapi_endpoint(router)` serves the spec as JSON
 - **🔁 JWT refresh pair + exchange** *(v0.5.0)* — stdlib-only HS256 with `typ=refresh` enforcement
+- **📡 Server-Sent Events sidecar** *(v0.7.0)* — `tiny_router_sse.py` adds `SSEEvent`, `sse_response`, and a streaming-aware OpenAPI overlay
 - **🪶 Tiny** — ~36 KB single file, zero deps
 
 ## 🚀 Quick Start
@@ -507,6 +508,37 @@ python examples/test_agent_callback_receiver.py -v
   rate limits per source, structured JSON logs with `x-request-id`
   correlation, and `/health`, `/ready`, and `/status` endpoints.
 
+
+## SSE sidecar (v0.7.0)
+
+Server-Sent Events support and a streaming-aware OpenAPI export live in the opt-in sidecar module `tiny_router_sse.py`. The core package stays at zero dependencies; importing the sidecar only pulls in `tiny_router` (already a dependency).
+
+```python
+from tiny_router import Router, openapi_spec
+from tiny_router_sse import (
+    SSEEvent, sse_response, install_streaming_decorator,
+    openapi_spec_streaming_overlay,
+)
+
+app = Router()
+install_streaming_decorator(app)  # adds streaming=True kwarg to @app.get etc.
+
+@app.get("/events", streaming=True)
+def events(req):
+    def gen():
+        for i in range(10):
+            yield SSEEvent(data={"i": i}, event="tick", id=str(i))
+    return sse_response(gen())
+
+spec = openapi_spec(app, title="My API")
+spec = openapi_spec_streaming_overlay(spec, app)
+# spec["paths"]["/events"]["get"]["responses"]["200"]["content"]
+# now contains a "text/event-stream" content type
+```
+
+The sidecar provides structured SSE events with full spec compliance (multiline data escaping, CRLF/CR/LF line splitting, JSON encoding of dicts/lists, comment/event/id/retry/data field ordering) and a decorator overlay that adds a `streaming: bool = False` keyword to `Router.get/post/put/patch/delete/head/options`. The OpenAPI overlay adds a `text/event-stream` content type to marked routes while preserving any existing JSON content types.
+
+See `tiny_router_sse.py` for the full API and `test_v070_sse.py` for 29 tests covering it.
 ## Ecosystem
 
 Part of the **tiny-*** zero-dependency toolkit for Python agent infrastructure:
@@ -521,7 +553,8 @@ Part of the **tiny-*** zero-dependency toolkit for Python agent infrastructure:
 - [**tiny-retry**](https://github.com/hussain-alsaibai/tiny-retry) — retry + backoff + circuit breaker
 - [**tiny-pool**](https://github.com/hussain-alsaibai/tiny-pool) — ThreadPool + AsyncPool
 - [**tiny-agent**](https://github.com/hussain-alsaibai/tiny-agent) — zero-dep agent framework
-- [**tiny-mcp**](https://github.com/hussain-alsaibai/tiny-mcp) — Model Context Protocol
+- [**tiny-mcp**](https://github.com/hussain-alsaibai/tiny-mcp)
+- [**tiny-mcp-skel**](https://github.com/hussain-alsaibai/tiny-mcp-skel) - stdlib-only MCP server skeleton (combines tiny-router blueprints + tiny-validator McpServer schema, ships today) — Model Context Protocol
 - [**tiny-embed**](https://github.com/hussain-alsaibai/tiny-embed) — embeddings + vector search
 - [**tiny-compose**](https://github.com/hussain-alsaibai/tiny-compose) — Stack any decorators in any order, declaratively
 - [**tiny-trace**](https://github.com/hussain-alsaibai/tiny-trace) — OTel-compatible tracing, sync + async, W3C propagation
