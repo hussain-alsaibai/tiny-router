@@ -2,6 +2,23 @@
 
 All notable changes to tiny-router are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.7.5] - 2026-10-26
+
+### Fixed
+- **CI was failing on every Python version.** `test_v074_redact_headers.py`
+  hard-coded two absolute paths from the machine where the test was
+  written (`/home/node/.openclaw/workspace` and
+  `/home/node/.openclaw/workspace/tiny-secret-mask`), so on a CI runner the
+  import of `tiny_secret_mask` failed with
+  `ModuleNotFoundError: No module named tiny_secret_mask` and the whole
+  module failed at collection. The test now resolves the sibling checkout
+  relative to its own file and falls back to the installed package.
+- CI now installs `tiny-secret-mask` (the optional dependency of the
+  header-redaction sidecar) instead of assuming it is present.
+
+### Changed
+- Bumped `__version__` and `pyproject.toml` to `0.7.5`.
+
 ## [0.7.4] - 2026-10-15
 
 ### Added

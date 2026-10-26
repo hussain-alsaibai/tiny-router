@@ -1,11 +1,21 @@
 """Tests for tiny-router v0.7.4 header-redaction middleware sidecar."""
 
+"""Tests for tiny-router v0.7.4 header-redaction middleware sidecar."""
+
 import sys
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
-sys.path.insert(0, "/home/node/.openclaw/workspace")
-sys.path.insert(0, "/home/node/.openclaw/workspace/tiny-secret-mask")
+# The redaction sidecar lazily imports tiny_secret_mask. It is an optional
+# dependency (the middleware is a passthrough without it), so the test
+# locates a sibling checkout when there is one and otherwise relies on the
+# installed package. No absolute paths: this test must pass in CI.
+for _candidate in (
+    Path(__file__).resolve().parent.parent / "tiny-secret-mask",
+):
+    if _candidate.is_dir():
+        sys.path.insert(0, str(_candidate))
 
 # Make sure tiny_secret_mask is importable
 import tiny_secret_mask

@@ -11,5 +11,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install pytest
-      - run: python -m pytest test_*.py -v
+      - name: Install test dependencies
+        # tiny-secret-mask is an optional runtime dependency of the
+        # header-redaction sidecar (the middleware is a passthrough without
+        # it). It is not on PyPI yet, so install it from GitHub.
+        run: |
+          pip install pytest
+          pip install "tiny-secret-mask @ git+https://github.com/hussain-alsaibai/tiny-secret-mask.git"
+      - name: Run test suite
+        run: python -m pytest test_*.py -v
