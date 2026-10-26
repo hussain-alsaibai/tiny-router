@@ -24,3 +24,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Topic :: Internet :: WWW/HTTP",
 ]
+
+
+[tool.setuptools]
+# Without an explicit py-modules list, setuptools flat-layout auto-discovery
+# produces an EMPTY wheel: `pip install tiny-router` installs no importable module.
+py-modules = ["tiny_router", "tiny_router_sse", "tiny_router_redact_headers", "tiny_router_redact_path"]
