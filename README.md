@@ -87,10 +87,17 @@ if __name__ == "__main__":
 ## 📦 Installation
 
 ```bash
-pip install tiny-router
+# From GitHub (recommended -- not yet on PyPI)
+pip install git+https://github.com/hussain-alsaibai/tiny-router.git
 ```
 
-Or just copy `tiny_router.py` into your project — it's a single file with zero dependencies.
+Or just copy `tiny_router.py` into your project — it's a single file with zero
+dependencies.
+
+<!-- NOTE: the name `tiny-router` on PyPI belongs to a different project
+(nekonoshiri/tiny-router). This project is not published to PyPI under that
+name, and installing `pip install tiny-router` would fetch that package
+instead. The GitHub URL above is the correct install for this project. -->
 
 ## ⚡ Async Handlers (v0.3.0)
 
