@@ -1,4 +1,5 @@
 # tiny-router — Zero-Dependency HTTP Router
+[![CI](https://github.com/hussain-alsaibai/tiny-router/actions/workflows/ci.yml/badge.svg)](https://github.com/hussain-alsaibai/tiny-router/actions/workflows/ci.yml)
 
 > **Like FastAPI/Flask, but in one file. Zero dependencies.**
 
