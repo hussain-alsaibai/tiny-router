@@ -2,6 +2,46 @@
 
 All notable changes to tiny-router are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.0] - 2026-11-09
+
+### Fixed
+
+- **`mount()` doubled the prefix the sub-router already declared.**
+  `Router(prefix="/api")` followed by `app.mount("/api", api)` — the README's
+  own example — registered `/api/api/users`, so every documented path 404'd.
+  A prefix that is already applied, or that already extends the mount prefix,
+  is now left alone; only a genuinely missing prefix is added.
+
+- **`mount(sub_router)` with one argument raised TypeError.** Also in the
+  README (`main.mount(api)`). It now uses the sub-router's own prefix.
+
+- **Mounting an unprefixed sub-router did not apply the prefix to its
+  existing routes.** `Router()` sub-routers were prefixed for dispatch but
+  the compiled patterns were never rebuilt, so every route 404'd.
+
+- **A handler that reads its path param from `request.params` returned 500.**
+  The router passed every path param as a keyword argument regardless of the
+  signature, so `def get_user(req)` raised
+  `TypeError: got an unexpected keyword argument 'id'`. Handlers now receive
+  only the params they declare; `**kwargs` handlers still receive all of
+  them, and `Depends()` values are unaffected.
+
+  The whole suite passed because every test declared its params. Both forms
+  are now covered.
+
+### Added
+
+- `get_routes(include_mounted=True)` and OpenAPI support for mounted
+  routers. Before this, `openapi_spec(main)` returned `paths: {}` for an API
+  built entirely from sub-routers — a spec describing zero endpoints for a
+  server answering all of them.
+
+### Notes
+
+- 11 regression tests in `test_v090_mount_and_params.py`; **7 fail against
+  0.8.0**. The 4 that pass on both are the controls (declared-param handler,
+  `**kwargs`, two independent mounts) and must keep passing.
+
 ## [0.8.0] - 2026-11-09
 
 ### Changed (breaking)

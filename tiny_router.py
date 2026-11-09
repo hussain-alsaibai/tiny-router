@@ -53,7 +53,7 @@ from urllib.parse import parse_qs
 from pathlib import Path
 
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 
 # ---------- Errors ----------
@@ -400,6 +400,26 @@ class Request:
 _PARAM_RE = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
 
 
+def _pattern_suffix(compiled: str) -> str:
+    """Recover the route path from an internal ``^...$`` regex string.
+
+    The body is already a regex (``/users/(?P<id>[^/]+)``), so it must be
+    re-compiled as a regex, not re-escaped. ``re.escape`` would turn the
+    named group into a literal, which is how a remounted route silently
+    stops matching.
+    """
+    if compiled.startswith("^"):
+        compiled = compiled[1:]
+    if compiled.endswith("$"):
+        compiled = compiled[:-1]
+    return compiled
+
+
+def _reprefix(pattern: "re.Pattern[str]", prefix: str) -> "re.Pattern[str]":
+    """Rebuild a compiled route pattern under a new prefix."""
+    return re.compile("^" + prefix + _pattern_suffix(pattern.pattern) + "$")
+
+
 def _compile_path(pattern: str) -> re.Pattern[str]:
     """Convert `/users/{id}` to a regex with a named group."""
     parts: list[str] = []
@@ -414,6 +434,28 @@ def _compile_path(pattern: str) -> re.Pattern[str]:
 
 Handler = Callable[..., Any]
 Middleware = Callable[[Request, Callable[[Request], Any]], Any]
+
+
+def _filter_by_signature(handler: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Drop keyword arguments the handler does not accept a name for.
+
+    A handler may take path params positionally by name (``def f(req, id)``)
+    or read them from ``req.params`` (``def f(req)``). Both are reasonable;
+    passing the second form every param as a keyword raised TypeError and the
+    router returned 500. ``**kwargs`` handlers keep everything.
+    """
+    try:
+        params = inspect.signature(handler).parameters
+    except (TypeError, ValueError):  # builtins / C callables
+        return kwargs
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()):
+        return kwargs
+    accepted = {
+        name
+        for name, p in params.items()
+        if p.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    }
+    return {k: v for k, v in kwargs.items() if k in accepted}
 
 
 class Router:
@@ -540,20 +582,56 @@ class Router:
 
     # ---- sub-routers ----
 
-    def mount(self, prefix: str, sub_router: Router) -> "Router":
+    def mount(self, prefix: "str | Router", sub_router: "Router | None" = None) -> "Router":
         """Mount a sub-router at the given prefix.
 
-        Example:
-            api = Router(prefix="/api")
-            app.mount("/api", api)
+        Example::
+
+            api = Router()
+            @api.get("/users")
+            def list_users(req): ...
+            app.mount("/api", api)      # explicit prefix
+
+            # A sub-router that already declares its own prefix only needs
+            # itself - the prefix is not applied twice.
+            v1 = Router(prefix="/api/v1")
+            app.mount(v1)
+
+        Mounting at a prefix the sub-router already declares is idempotent:
+        the routes are not prefixed twice. This is the bug the README example
+        hit - ``Router(prefix="/api")`` then ``app.mount("/api", api)``
+        registered ``/api/api/users``.
         """
-        prefix = prefix.rstrip("/")
-        if sub_router._prefix and not sub_router._prefix.startswith(prefix):
-            sub_router._prefix = prefix + sub_router._prefix
-        elif sub_router._prefix:
-            pass  # already set
-        else:
+        if isinstance(prefix, Router):
+            if sub_router is not None:
+                raise TypeError("mount() takes either (prefix, router) or (router,)")
+            sub_router = prefix
+            prefix = sub_router._prefix or "/"
+        if sub_router is None:
+            raise TypeError("mount() requires a sub-router")
+
+        prefix = (prefix or "").rstrip("/")
+
+        existing = sub_router._prefix
+        if not existing:
+            # No declared prefix: adopt the mount prefix, and recompile the
+            # already-registered routes so they actually resolve under it.
             sub_router._prefix = prefix
+            sub_router._routes = [
+                (_reprefix(compiled, prefix), method, fn, tags)
+                for (compiled, method, fn, tags) in sub_router._routes
+            ]
+        elif prefix == existing or existing.startswith(prefix + "/"):
+            # Sub-router already carries this prefix (or a longer one).
+            # Leave its routes alone - this is the idempotent case.
+            pass
+        else:
+            sub_router._prefix = prefix + existing
+            sub_router._routes = [
+                (_reprefix(compiled, prefix), method, fn, tags)
+                for (compiled, method, fn, tags) in sub_router._routes
+            ]
+
         self._mounted_routers.append((prefix, sub_router))
         return self
 
@@ -893,6 +971,12 @@ class Router:
                 # v0.3.0: resolve dependencies
                 resolved_deps = _resolve_dependencies(handler, request)
                 merged = {**resolved_deps, **request.params}
+                # v0.9.0: only pass the path params the handler declares.
+                # Handlers read `req.params` too, and most of them take just
+                # `(req)`; passing every param as a keyword made those raise
+                # TypeError -> 500 in production, while the whole suite (which
+                # always declared the params) stayed green.
+                merged = _filter_by_signature(handler, merged)
                 result = handler(request, **merged)
                 if inspect.iscoroutine(result):
                     # Async handler: run on a fresh event loop.
@@ -966,9 +1050,21 @@ class Router:
 
     # ---- route listing / groups ----
 
-    def get_routes(self, tag: str | None = None) -> list[dict[str, Any]]:
-        """List registered routes and WebSocket handlers, optionally filtered by tag."""
+    def get_routes(
+        self, tag: str | None = None, *, include_mounted: bool = False
+    ) -> list[dict[str, Any]]:
+        """List registered routes and WebSocket handlers, optionally filtered by tag.
+
+        ``include_mounted=True`` also walks mounted sub-routers. Their routes
+        already carry their full prefix (mount() remaps them), so nothing is
+        prepended here. OpenAPI generation needs this: before it existed, a
+        mounted API produced an empty ``paths`` object - a spec that
+        describes zero endpoints while the server happily answers them.
+        """
         result = []
+        if include_mounted:
+            for _prefix, sub in self._mounted_routers:
+                result.extend(sub.get_routes(tag, include_mounted=True))
         for pattern, method, handler, tags in self._routes:
             if tag is None or tag in tags:
                 result.append({
@@ -1287,7 +1383,7 @@ def openapi_spec(
     if servers:
         spec["servers"] = servers
     paths: dict[str, dict] = {}
-    for entry in router.get_routes():
+    for entry in router.get_routes(include_mounted=True):
         method = entry["method"].lower()
         raw = entry["pattern"]
         if method == "ws":
