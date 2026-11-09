@@ -10,7 +10,7 @@
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)](.github/workflows/ci.yml)
 [![CI](https://github.com/hussain-alsaibai/tiny-router/actions/workflows/ci.yml/badge.svg)](https://github.com/hussain-alsaibai/tiny-router/actions/workflows/ci.yml)
 [![Benchmark](https://img.shields.io/badge/benchmark-76K%20req%2Fs-blueviolet)](benchmark.py)
-[![Version](https://img.shields.io/badge/version-0.9.0-blue.svg)](tiny_router.py)
+[![Version](https://img.shields.io/badge/version-0.9.1-blue.svg)](tiny_router.py)
 
 `tiny-router` is a single-file HTTP router with path parameters, middleware chains, CORS, streaming, static file serving, sub-routers, rate limiting, JSON helpers, and a built-in stdlib server. Pure Python standard library — no Flask, no FastAPI, no Starlette, no uvicorn.
 
@@ -660,7 +660,7 @@ def timing_middleware(req: Request, next_handler):
 @app.middleware
 def auth_middleware(req: Request, next_handler):
     if req.headers.get("Authorization") != "Bearer secret":
-        return Response(401, {"error": "Unauthorized"})
+        return Response({"error": "Unauthorized"}, status=401)
     return next_handler(req)
 
 @app.get("/protected")

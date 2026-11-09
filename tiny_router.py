@@ -53,7 +53,7 @@ from urllib.parse import parse_qs
 from pathlib import Path
 
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 
 # ---------- Errors ----------
@@ -565,6 +565,31 @@ class Router:
             return fn
 
         return decorator
+
+    # ---- middleware ----
+
+    def middleware(self, fn: Callable) -> Callable:
+        """Decorator form of :meth:`use`.
+
+        Example:
+            @app.middleware
+            def timing(req, next_handler):
+                resp = next_handler(req)
+                resp.headers["X-Process-Time"] = "..."
+                return resp
+        """
+        self.use(fn)
+        return fn
+
+    @property
+    def websocket(self) -> Callable:
+        """Alias of :meth:`ws`, for the spelling most routers use.
+
+        Example:
+            @app.websocket("/ws")
+            async def echo(ws): ...
+        """
+        return self.ws
 
     # ---- static files ----
 

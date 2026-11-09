@@ -2,6 +2,32 @@
 
 All notable changes to tiny-router are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.1] - 2026-11-09
+
+### Fixed
+
+- **`@app.middleware` did not exist.** The README's "Advanced: Middleware
+  Chaining" section documents the decorator form in full, but `Router` only
+  had `use()`, so copying the example raised `AttributeError: 'Router' object
+  has no attribute 'middleware'`. `middleware()` is now a decorator that
+  registers and returns the function, so stacked decorators keep their names.
+
+- **`@app.websocket` did not exist.** Only `ws()` was implemented. The
+  README's WebSocket section uses `@app.websocket("/ws")`. Added as a
+  property returning `ws`, so both spellings register into `_ws_routes`.
+
+- **The README's error example built a `Response` backwards.**
+  `Response(401, {"error": "Unauthorized"})` reads like `(status, body)`, but
+  the constructor is `(body, status)` - the example produced
+  `body=b'401'`, `status={'error': 'Unauthorized'}`. Nothing raised. The
+  example now uses the keyword form, which cannot be misread.
+
+### Added
+
+- 9 regression tests in `test_v091_documented_api.py`; **6 fail against
+  0.9.0**. One of them re-executes the README's middleware block verbatim, so
+  the doc and the code cannot drift apart again.
+
 ## [0.9.0] - 2026-11-09
 
 ### Fixed
