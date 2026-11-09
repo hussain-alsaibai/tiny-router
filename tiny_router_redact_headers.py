@@ -4,7 +4,10 @@ This module is imported by tiny_router at runtime (lazily). It adds:
 
 - redact_headers_middleware(*, stats=None) - a tiny-router middleware that
   mutates req.headers in place by calling tiny_secret_mask.mask_headers().
-  No-op if tiny_secret_mask is not installed.
+  Raises RedactionUnavailable if tiny_secret_mask is not installed, because
+  a redaction layer that cannot redact must not report success.
+- redact_headers_middleware_passthrough(*, stats=None) - the explicitly named
+  opt-out for callers who genuinely want a no-op.
 - redactor_with_stats() - convenience that returns (middleware, stats).
   Useful for wiring to /metrics.
 - HeaderStats - counter object with headers_seen, redactions,
@@ -29,7 +32,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, Tuple
 
 
-__version__ = "0.7.4"
+__version__ = "0.8.0"
 
 
 class HeaderStats:
@@ -60,19 +63,27 @@ class HeaderStats:
         }
 
 
-def _build_redactor():
-    """Lazy-build the mask_headers function from tiny_secret_mask.
+class RedactionUnavailable(RuntimeError):
+    """Raised when header redaction was requested but cannot be performed.
 
-    Returns (mask_fn, available_bool). When unavailable, mask_fn is a
-    passthrough that returns the input dict unchanged.
+    Silently passing headers through would tell the caller that credentials
+    were scrubbed while they were not. A redaction layer that cannot redact
+    must refuse, not pretend.
+    """
+
+
+def _build_redactor():
+    """Lazily resolve mask_headers from tiny_secret_mask.
+
+    Returns (mask_fn_or_None, available_bool). When unavailable the function
+    is None on purpose: the caller decides whether that is fatal or whether
+    it asked for the passthrough explicitly.
     """
     try:
         from tiny_secret_mask import mask_headers as _mh
         return _mh, True
     except ImportError:
-        def _passthrough(headers, **kw):
-            return dict(headers) if headers else {}
-        return _passthrough, False
+        return None, False
 
 
 _MASK_HEADERS, MASK_AVAILABLE = _build_redactor()
@@ -83,8 +94,13 @@ def redact_headers_middleware(*, stats: Optional[HeaderStats] = None):
 
     The middleware reads req.headers (a dict-like), produces a NEW dict
     via tiny_secret_mask.mask_headers(), and assigns it back to req.headers.
-    No-op if tiny_secret_mask is not installed: req.headers is left
-    unchanged.
+
+    Raises RedactionUnavailable immediately when tiny_secret_mask is not
+    installed. This is deliberate: the previous behaviour was to install a
+    silently ineffective middleware, so a deployment could believe it was
+    scrubbing Authorization headers when it was copying them through. Build
+    the middleware at startup, not per request, so the failure is loud and
+    early. Use redact_headers_middleware_passthrough() to opt in to a no-op.
 
     The middleware is order-sensitive: register it AFTER any middleware
     that injects headers (e.g. JWT middleware adding X-User-Id) so that
@@ -96,6 +112,14 @@ def redact_headers_middleware(*, stats: Optional[HeaderStats] = None):
     >>> app = Router()
     >>> app.add(redact_headers_middleware())
     """
+    if not MASK_AVAILABLE:
+        raise RedactionUnavailable(
+            "tiny_secret_mask is not installed, so header redaction cannot be "
+            "performed. Install tiny-secret-mask, or call "
+            "redact_headers_middleware_passthrough() if passing credentials "
+            "through unredacted is what you intend."
+        )
+
     def middleware(req, call_next):
         if hasattr(req, "headers") and req.headers is not None:
             redacted = _MASK_HEADERS(req.headers)
@@ -117,6 +141,22 @@ def redact_headers_middleware(*, stats: Optional[HeaderStats] = None):
     return middleware
 
 
+def redact_headers_middleware_passthrough(*, stats: Optional[HeaderStats] = None):
+    """Explicit no-op middleware: headers pass through unredacted.
+
+    This exists so that "I want no redaction" is a decision a caller writes
+    down, not an accident that happens when a dependency is missing. The name
+    appears in the call site and in code review.
+
+    Raises nothing and redacts nothing.
+    """
+    def middleware(req, call_next):
+        if stats is not None and hasattr(req, "headers") and req.headers is not None:
+            stats.headers_seen += 1
+        return call_next(req)
+    return middleware
+
+
 def redactor_with_stats() -> Tuple[Any, HeaderStats]:
     """Convenience that returns (middleware, stats).
 
@@ -129,6 +169,8 @@ def redactor_with_stats() -> Tuple[Any, HeaderStats]:
 
 __all__ = [
     "HeaderStats",
+    "RedactionUnavailable",
     "redact_headers_middleware",
+    "redact_headers_middleware_passthrough",
     "redactor_with_stats",
 ]

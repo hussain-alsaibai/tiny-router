@@ -5,6 +5,8 @@
 import sys
 import unittest
 from pathlib import Path
+
+import pytest
 from types import SimpleNamespace
 
 # The redaction sidecar lazily imports tiny_secret_mask. It is an optional
@@ -21,6 +23,7 @@ for _candidate in (
 import tiny_secret_mask
 import tiny_router
 import tiny_router_redact_headers as rh
+import tiny_router_redact_headers as _rh
 
 
 def make_req(headers=None):
@@ -166,3 +169,51 @@ class TestRouterIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---- the middleware must not silently no-op -------------------------------
+#
+# AGENTS.md, 2026-10-26: a redaction function that cannot do its job must
+# raise, with an explicitly named opt-out for callers who want a no-op.
+# The original implementation installed a passthrough middleware when
+# tiny_secret_mask was missing, so a deployment could believe it was
+# scrubbing Authorization headers while copying them straight through.
+
+
+def test_missing_dependency_raises_instead_of_passing_through(monkeypatch):
+    monkeypatch.setattr(_rh, "MASK_AVAILABLE", False, raising=True)
+    with pytest.raises(_rh.RedactionUnavailable) as exc:
+        _rh.redact_headers_middleware()
+    msg = str(exc.value).lower()
+    assert "tiny" in msg and "install" in msg
+    # The opt-out must be named in the error, or the caller has no path out.
+    assert "passthrough" in msg
+
+
+def test_passthrough_is_explicit_and_opt_in(monkeypatch):
+    monkeypatch.setattr(_rh, "MASK_AVAILABLE", False, raising=True)
+    stats = _rh.HeaderStats()
+    mw = _rh.redact_headers_middleware_passthrough(stats=stats)
+    req = SimpleNamespace(headers={"authorization": "Bearer " + "t" * 24})
+    mw(req, lambda r: r)
+    # Unredacted on purpose - the caller wrote "passthrough" at the call site.
+    assert req.headers["authorization"].startswith("Bearer ")
+    assert stats.headers_seen == 1
+    assert stats.redactions == 0
+
+
+def test_passthrough_does_not_count_phantom_redactions():
+    stats = _rh.HeaderStats()
+    mw = _rh.redact_headers_middleware_passthrough(stats=stats)
+    req = SimpleNamespace(headers={"x-trace": "abc"})
+    mw(req, lambda r: r)
+    assert stats.redactions == 0
+    assert stats.last_redacted_header is None
+
+
+def test_middleware_constructs_when_dependency_is_present():
+    """The failure must be about the missing dependency, not about the
+    middleware being unbuildable in the normal case."""
+    if not _rh.MASK_AVAILABLE:
+        pytest.skip("tiny_secret_mask not installed here")
+    assert callable(_rh.redact_headers_middleware())

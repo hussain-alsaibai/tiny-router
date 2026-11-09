@@ -2,6 +2,45 @@
 
 All notable changes to tiny-router are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.8.0] - 2026-11-09
+
+### Changed (breaking)
+
+- **`redact_headers_middleware()` now raises `RedactionUnavailable` when
+  `tiny_secret_mask` is not installed**, instead of returning a middleware that
+  passed every header through unchanged.
+
+  The old behaviour was the defect documented in AGENTS.md on 2026-10-26:
+  a redaction function that cannot do its job must refuse. A silently
+  ineffective middleware is worse than an absent one, because the deployment
+  believes it is scrubbing `Authorization` while `HeaderStats.redactions`
+  stays at `0` and the credential lands in the log. That reads like a quiet
+  week, not like a leak.
+
+  Practically: build the middleware at startup, not per request, so the
+  failure is loud and immediate rather than a 500 on the first request that
+  happens to carry a secret.
+
+### Added
+
+- `redact_headers_middleware_passthrough()` - the explicitly named opt-out.
+  It redacts nothing and counts nothing but `headers_seen`. "I want no
+  redaction" becomes a written decision that appears in the call site and in
+  review, not an accident that happens when a dependency goes missing.
+- `RedactionUnavailable` - exported from `tiny_router_redact_headers`.
+
+### Fixed
+
+- `test_v074_redact_headers.py` gained a `pytest` import; the three new tests
+  are written for pytest and the module is collected by both runners.
+
+### Verified
+
+- 185 passed, 1 skipped. The three new tests **fail against the v0.7.5
+  implementation** (`AttributeError: RedactionUnavailable`) and pass after.
+  The fourth (`test_middleware_constructs_when_dependency_is_present`) is a
+  control that must pass on both, so it is not counted as a proof of the fix.
+
 ## [0.7.5] - 2026-10-26
 
 ### Fixed

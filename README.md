@@ -10,7 +10,7 @@
 [![Build](https://img.shields.io/badge/build-passing-brightgreen.svg)](.github/workflows/ci.yml)
 [![CI](https://github.com/hussain-alsaibai/tiny-router/actions/workflows/ci.yml/badge.svg)](https://github.com/hussain-alsaibai/tiny-router/actions/workflows/ci.yml)
 [![Benchmark](https://img.shields.io/badge/benchmark-76K%20req%2Fs-blueviolet)](benchmark.py)
-[![Version](https://img.shields.io/badge/version-0.7.5-blue.svg)](tiny_router.py)
+[![Version](https://img.shields.io/badge/version-0.8.0-blue.svg)](tiny_router.py)
 
 `tiny-router` is a single-file HTTP router with path parameters, middleware chains, CORS, streaming, static file serving, sub-routers, rate limiting, JSON helpers, and a built-in stdlib server. Pure Python standard library — no Flask, no FastAPI, no Starlette, no uvicorn.
 
@@ -548,6 +548,45 @@ spec = openapi_spec_streaming_overlay(spec, app)
 The sidecar provides structured SSE events with full spec compliance (multiline data escaping, CRLF/CR/LF line splitting, JSON encoding of dicts/lists, comment/event/id/retry/data field ordering) and a decorator overlay that adds a `streaming: bool = False` keyword to `Router.get/post/put/patch/delete/head/options`. The OpenAPI overlay adds a `text/event-stream` content type to marked routes while preserving any existing JSON content types.
 
 See `tiny_router_sse.py` for the full API and `test_v070_sse.py` for 29 tests covering it.
+## Header redaction sidecar (v0.7.4+)
+
+Path and header redaction live in opt-in sidecars, so the core router keeps its
+zero-dependency budget. `tiny_router_redact_headers.py` scrubs credentials out
+of `req.headers` before anything downstream persists them.
+
+```python
+from tiny_router_redact_headers import (
+    redact_headers_middleware, redactor_with_stats,
+)
+
+middleware, stats = redactor_with_stats()
+app.add(middleware)          # built once, at startup
+app.add(metrics_middleware(stats))
+```
+
+**It raises if it cannot redact.** When `tiny_secret_mask` is not installed the
+constructor raises `RedactionUnavailable` rather than installing a middleware
+that copies `Authorization` through untouched. A redaction layer that fails
+quietly is worse than none: the operator believes the headers were scrubbed,
+the logs say `redactions: 0`, and the credential is in the log.
+
+If you genuinely want no redaction, say so at the call site:
+
+```python
+from tiny_router_redact_headers import redact_headers_middleware_passthrough
+
+app.add(redact_headers_middleware_passthrough())   # explicit, greppable, reviewed
+```
+
+### Ordering
+
+The middleware is order-sensitive in both directions:
+
+- register it **after** any middleware that injects headers (a JWT middleware
+  adding `X-User-Id`) so injected headers are redacted too;
+- register it **before** any middleware that persists headers (logging, audit,
+  trace export) so nothing is written before it is scrubbed.
+
 ## Ecosystem
 
 Part of the **tiny-*** zero-dependency toolkit for Python agent infrastructure:
