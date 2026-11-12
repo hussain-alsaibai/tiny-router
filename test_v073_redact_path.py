@@ -22,7 +22,7 @@ class _Req:
 
 class TestVersion(unittest.TestCase):
     def test_version(self) -> None:
-        self.assertEqual(__version__, "0.7.3")
+        self.assertEqual(__version__, "0.7.4")
 
 
 class TestRedactionStats(unittest.TestCase):
@@ -124,6 +124,74 @@ class TestRedactorWithStats(unittest.TestCase):
         req = _Req("/u/550e8400-e29b-41d4-a716-446655440000")
         mw(req, lambda r: None)
         self.assertEqual(stats.redactions, 1)
+
+
+class TestRedactionUnavailableIsLoud(unittest.TestCase):
+    """A redaction middleware that cannot redact must refuse, not pretend.
+
+    Regression for the silent pass-through: when tiny_secret_mask was missing,
+    redact_path_middleware() returned a middleware that forwarded req.path
+    verbatim, so a deployment believed URL credentials were scrubbed.
+    """
+
+    def _patch_unavailable(self):
+        import tiny_router_redact_path as mod
+        original = mod.MASK_AVAILABLE, mod._MASK
+        mod.MASK_AVAILABLE, mod._MASK = False, None
+        self.addCleanup(lambda: (setattr(mod, "MASK_AVAILABLE", original[0]),
+                                 setattr(mod, "_MASK", original[1])))
+
+    def test_raises_when_dependency_missing(self) -> None:
+        from tiny_router_redact_path import RedactionUnavailable
+        self._patch_unavailable()
+        with self.assertRaises(RedactionUnavailable):
+            redact_path_middleware()
+
+    def test_raises_for_redactor_with_stats(self) -> None:
+        import tiny_router_redact_path as mod
+        from tiny_router_redact_path import RedactionUnavailable
+        self._patch_unavailable()
+        with self.assertRaises(RedactionUnavailable):
+            mod.redactor_with_stats()
+
+    def test_error_names_both_remedies(self) -> None:
+        import tiny_router_redact_path as mod
+        self._patch_unavailable()
+        try:
+            mod.redact_path_middleware()
+        except mod.RedactionUnavailable as exc:
+            text = str(exc)
+            self.assertIn("tiny-secret-mask", text)
+            self.assertIn("redact_path_middleware_passthrough", text)
+        else:
+            self.fail("expected RedactionUnavailable")
+
+    def test_passthrough_works_without_dependency(self) -> None:
+        from tiny_router_redact_path import redact_path_middleware_passthrough
+        self._patch_unavailable()
+        mw = redact_path_middleware_passthrough()
+        req = _Req("/u/550e8400-e29b-41d4-a716-446655440000")
+        mw(req, lambda r: None)
+        # Deliberately unredacted -- that is what the caller asked for.
+        self.assertIn("550e8400", req.path)
+
+    def test_passthrough_counts_paths_but_no_redactions(self) -> None:
+        from tiny_router_redact_path import redact_path_middleware_passthrough
+        self._patch_unavailable()
+        stats = RedactionStats()
+        mw = redact_path_middleware_passthrough(stats=stats)
+        mw(_Req("/u/550e8400-e29b-41d4-a716-446655440000"), lambda r: None)
+        self.assertEqual(stats.paths_seen, 1)
+        self.assertEqual(stats.redactions, 0)
+
+    def test_passthrough_is_marked_not_a_redactor(self) -> None:
+        from tiny_router_redact_path import redact_path_middleware_passthrough
+        mw = redact_path_middleware_passthrough()
+        self.assertFalse(mw._is_path_redactor)
+
+    def test_real_redactor_is_marked(self) -> None:
+        mw = redact_path_middleware()
+        self.assertTrue(mw._is_path_redactor)
 
 
 if __name__ == "__main__":

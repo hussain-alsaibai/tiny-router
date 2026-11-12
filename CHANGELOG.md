@@ -2,6 +2,42 @@
 
 All notable changes to tiny-router are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.2] - 2026-11-12
+
+### Fixed
+
+- **The path-redaction sidecar silently passed credentials through.**
+  `tiny_router_redact_path.redact_path_middleware()` resolved
+  `tiny_secret_mask.mask_route_path` once at import and, if the import failed,
+  returned a middleware whose first line was `if mask is None: return nxt(req)`.
+  The deployment got a working route handler and an unredacted
+  `/reset/<token>` in every access log. Nothing failed, nothing warned.
+
+  The module's own tests passed because they ran on a machine where
+  `tiny_secret_mask` happened to be installed, so the unavailable branch was
+  never exercised. Reproduced by running the suite with the dependency absent
+  from `sys.path`: `path after: /u/550e8400-...` -- `LEAKED`.
+
+  Now matches the header sidecar, which has raised since v0.7.4:
+  the constructor raises `RedactionUnavailable` when the dependency is missing,
+  and callers who want a no-op must name it with
+  `redact_path_middleware_passthrough()`.
+
+- **The CI matrix stopped at 3.12** while the package claims `>=3.8` with no
+  upper bound. Added 3.13 and 3.14, plus the matching trove classifiers.
+  3.13 was already available locally and the suite is green on it
+  (213 passed); 3.12-and-below never would have caught a 3.13-only break.
+
+### Added
+
+- `redact_path_middleware_passthrough()` -- explicit, greppable opt-out,
+  mirroring `redact_headers_middleware_passthrough()`. It still increments
+  `paths_seen` so an intentional no-op stays visible in `/metrics`.
+- `RedactionUnavailable` in `tiny_router_redact_path`, same name and semantics
+  as the header sidecar's exception.
+- 7 regression tests. Six of them fail against the pre-fix module (verified by
+  restoring the old file in a scratch clone).
+
 ## [0.9.1] - 2026-11-09
 
 ### Fixed

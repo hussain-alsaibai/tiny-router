@@ -1,6 +1,6 @@
 {
   "name": "tiny-router",
-  "version": "0.9.1",
+  "version": "0.9.2",
   "description": "Zero-dependency HTTP router with path parameters, middleware chains, JSON helpers, and built-in stdlib server.",
   "readme": "README.md",
   "license": "MIT",

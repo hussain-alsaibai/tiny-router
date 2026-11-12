@@ -548,35 +548,52 @@ spec = openapi_spec_streaming_overlay(spec, app)
 The sidecar provides structured SSE events with full spec compliance (multiline data escaping, CRLF/CR/LF line splitting, JSON encoding of dicts/lists, comment/event/id/retry/data field ordering) and a decorator overlay that adds a `streaming: bool = False` keyword to `Router.get/post/put/patch/delete/head/options`. The OpenAPI overlay adds a `text/event-stream` content type to marked routes while preserving any existing JSON content types.
 
 See `tiny_router_sse.py` for the full API and `test_v070_sse.py` for 29 tests covering it.
-## Header redaction sidecar (v0.7.4+)
+## Path and header redaction sidecars (v0.9.2+)
 
 Path and header redaction live in opt-in sidecars, so the core router keeps its
 zero-dependency budget. `tiny_router_redact_headers.py` scrubs credentials out
-of `req.headers` before anything downstream persists them.
+of `req.headers`; `tiny_router_redact_path.py` scrubs them out of `req.path`
+(URL segments carry credentials more often than people expect — signed links,
+reset tokens, presigned object-storage URLs).
 
 ```python
 from tiny_router_redact_headers import (
     redact_headers_middleware, redactor_with_stats,
 )
+from tiny_router_redact_path import redact_path_middleware
 
 middleware, stats = redactor_with_stats()
-app.add(middleware)          # built once, at startup
+app.add(middleware)                              # built once, at startup
+app.add(redact_path_middleware())                # before any access log
 app.add(metrics_middleware(stats))
 ```
 
-**It raises if it cannot redact.** When `tiny_secret_mask` is not installed the
-constructor raises `RedactionUnavailable` rather than installing a middleware
-that copies `Authorization` through untouched. A redaction layer that fails
-quietly is worse than none: the operator believes the headers were scrubbed,
-the logs say `redactions: 0`, and the credential is in the log.
+**Both raise if they cannot redact.** When `tiny_secret_mask` is not installed,
+both constructors raise `RedactionUnavailable` rather than installing a
+middleware that copies `Authorization` — or `/reset/<token>` — through
+untouched. A redaction layer that fails quietly is worse than none: the
+operator believes the request was scrubbed, the logs say `redactions: 0`, and
+the credential is in the log.
+
+> v0.9.2 fixed the path sidecar, which was still doing exactly that: with
+> `tiny_secret_mask` absent it returned a working middleware that forwarded
+> `req.path` verbatim. Its tests passed only because the developer machine had
+> the dependency installed. The header sidecar had already been corrected in
+> v0.7.4; the path sidecar was missed in the same pass.
 
 If you genuinely want no redaction, say so at the call site:
 
 ```python
 from tiny_router_redact_headers import redact_headers_middleware_passthrough
+from tiny_router_redact_path import redact_path_middleware_passthrough
 
 app.add(redact_headers_middleware_passthrough())   # explicit, greppable, reviewed
+app.add(redact_path_middleware_passthrough())      # ditto
 ```
+
+Each passthrough middleware still increments `paths_seen` / `headers_seen`, so
+a `/metrics` panel shows the traffic even when redaction is off — an
+intentional no-op is visible, an accidental one is not.
 
 ### Ordering
 

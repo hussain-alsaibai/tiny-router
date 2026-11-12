@@ -5,7 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12"]
+        python-version: ["3.8", "3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -13,8 +13,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install test dependencies
         # tiny-secret-mask is an optional runtime dependency of the
-        # header-redaction sidecar (the middleware is a passthrough without
-        # it). It is not on PyPI yet, so install it from GitHub.
+        # redaction sidecars. Without it, redact_path_middleware() and
+        # redact_headers_middleware() raise RedactionUnavailable rather than
+        # silently passing credentials through, so the suite installs it.
+        # It is not on PyPI yet, so install it from GitHub.
         run: |
           pip install pytest
           pip install "tiny-secret-mask @ git+https://github.com/hussain-alsaibai/tiny-secret-mask.git"
