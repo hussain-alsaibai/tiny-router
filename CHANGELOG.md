@@ -2,6 +2,53 @@
 
 All notable changes to tiny-router are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.3] - 2026-11-18
+
+### Fixed
+
+- **A 204 response advertised a `content-type` and a HEAD response wrote the
+  body it declared.** `_make_handler._run` set `Content-Length` to
+  `len(response.body)` and then wrote `response.body` for every status and
+  every method. Two consequences, both measured over a raw socket against a
+  real `ThreadingHTTPServer`:
+
+  ```
+  GET /nothing      -> HTTP/1.0 204 No Content
+                       content-type: application/json      <- forbidden
+  HEAD /headroute   -> HTTP/1.0 200 OK
+                       Content-Length: 6
+                       BODY BYTES: 6  b'abcdef'           <- must be 0
+  ```
+
+  A body sent after a 204 or a HEAD desynchronises the connection: the client
+  reads those bytes as the beginning of the next response on a keep-alive
+  socket. A 204 also must not declare a representation it is forbidden to
+  send (RFC 9110 §15.3.5), so the default `application/json` is no longer
+  applied to it. 304 is handled the same way. HEAD keeps the
+  `Content-Length` the equivalent GET would have returned, which is the
+  purpose of the method, but writes zero bytes.
+
+  This is the fourth release cycle in which the defect was reported. It
+  survived because `test_v090_mount_and_params.py` and
+  `test_tiny_router.py:302` both assert on a `Response` object or route
+  through a hand-rolled WSGI shim, so neither ever reads the bytes that leave
+  the process. The status line was always correct; the framing after it was
+  not.
+
+### Added
+
+- `test_v092_wire_bodyless.py` — seven tests that open a real TCP connection
+  and count the body bytes themselves. Verified against the old code: 3 of 7
+  fail without the fix, including the 204 `content-type` and the 6-byte HEAD
+  body. Wiring the test to the wire rather than to an object is the change
+  that makes the regression impossible to reintroduce silently.
+
+### Notes
+
+- No API change. HEAD is still registered explicitly via `@app.head()` and is
+  still not inferred from a GET route; a test now pins that 404 so making it a
+  fallback later is a deliberate, visible decision.
+
 ## [0.9.2] - 2026-11-12
 
 ### Fixed

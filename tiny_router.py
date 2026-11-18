@@ -53,7 +53,7 @@ from urllib.parse import parse_qs
 from pathlib import Path
 
 
-__version__ = "0.9.2"
+__version__ = "0.9.3"
 
 
 # ---------- Errors ----------
@@ -1696,14 +1696,30 @@ def _make_handler(router: Router) -> type[BaseHTTPRequestHandler]:
                 )
                 response = router._dispatch(request)
                 # _dispatch guarantees Response (async coros already awaited)
-                if "content-type" not in {k.lower() for k in response.headers}:
+                # RFC 9110 §15.3.5 / §6.4.1: 204 and 304 never carry a body,
+                # and a HEAD response carries headers only. Sending a body
+                # after those status lines desynchronises the connection:
+                # the client reads our bytes as the start of the next
+                # response. A 204 also must not advertise a representation it
+                # is not allowed to send, so no default content-type is added.
+                bodyless = method == "HEAD" or response.status in (204, 304)
+                if (
+                    not bodyless
+                    and "content-type" not in {k.lower() for k in response.headers}
+                ):
                     response.headers["content-type"] = "application/json"
                 self.send_response(response.status, status_text(response.status))
                 for k, v in response.headers.items():
                     self.send_header(k, v)
-                self.send_header("Content-Length", str(len(response.body)))
+                # HEAD keeps the length the GET would have returned, which is
+                # the point of the method; 204/304 must not send the header at
+                # all unless the handler set it explicitly.
+                if method == "HEAD":
+                    self.send_header("Content-Length", str(len(response.body)))
+                elif response.status not in (204, 304):
+                    self.send_header("Content-Length", str(len(response.body)))
                 self.end_headers()
-                if response.body:
+                if response.body and not bodyless:
                     self.wfile.write(response.body)
             except Exception as exc:  # noqa: BLE001
                 self.send_response(500, "Internal Server Error")
