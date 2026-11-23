@@ -10,20 +10,31 @@ import pytest
 from types import SimpleNamespace
 
 # The redaction sidecar lazily imports tiny_secret_mask. It is an optional
-# dependency (the middleware is a passthrough without it), so the test
-# locates a sibling checkout when there is one and otherwise relies on the
-# installed package. No absolute paths: this test must pass in CI.
+# dependency (the middleware raises RedactionUnavailable without it), so this
+# module must import even when the dependency is missing -- otherwise pytest
+# reports a collection ERROR for the WHOLE file and the tests that do not need
+# the dependency never run. The sibling lookup is a convenience for a local
+# checkout; CI relies on the installed package or on the skip below.
 for _candidate in (
     Path(__file__).resolve().parent.parent / "tiny-secret-mask",
 ):
     if _candidate.is_dir():
         sys.path.insert(0, str(_candidate))
 
-# Make sure tiny_secret_mask is importable
-import tiny_secret_mask
-import tiny_router
-import tiny_router_redact_headers as rh
-import tiny_router_redact_headers as _rh
+try:
+    import tiny_secret_mask  # noqa: F401
+    _HAS_SECRET_MASK = True
+except ImportError:  # pragma: no cover - depends on the environment
+    _HAS_SECRET_MASK = False
+
+requires_secret_mask = pytest.mark.skipif(
+    not _HAS_SECRET_MASK,
+    reason="tiny-secret-mask is not installed; header redaction cannot be exercised",
+)
+
+import tiny_router  # noqa: E402
+import tiny_router_redact_headers as rh  # noqa: E402
+import tiny_router_redact_headers as _rh  # noqa: E402
 
 
 def make_req(headers=None):
@@ -55,6 +66,7 @@ class TestHeaderStats(unittest.TestCase):
         self.assertEqual(d["last_redacted_header"], "Authorization")
 
 
+@requires_secret_mask
 class TestRedactHeadersMiddleware(unittest.TestCase):
     def test_authorization_redacted(self):
         mw = rh.redact_headers_middleware()
@@ -130,6 +142,7 @@ class TestRedactHeadersMiddleware(unittest.TestCase):
         self.assertEqual(result, b"body")
 
 
+@requires_secret_mask
 class TestRedactorWithStats(unittest.TestCase):
     def test_returns_tuple(self):
         mw, stats = rh.redactor_with_stats()
@@ -153,6 +166,7 @@ class TestRedactorWithStats(unittest.TestCase):
         self.assertIsNone(stats.last_redacted_header)
 
 
+@requires_secret_mask
 class TestRouterIntegration(unittest.TestCase):
     def test_router_with_middleware(self):
         app = tiny_router.Router()
@@ -181,6 +195,10 @@ if __name__ == "__main__":
 
 
 def test_missing_dependency_raises_instead_of_passing_through(monkeypatch):
+    # Availability is resolved at call time (the module flag is frozen at
+    # import, so patching it alone no longer describes "the dependency is
+    # missing" — the resolver has to answer, too).
+    monkeypatch.setattr(_rh, "_resolve_mask_headers", lambda: (None, False))
     monkeypatch.setattr(_rh, "MASK_AVAILABLE", False, raising=True)
     with pytest.raises(_rh.RedactionUnavailable) as exc:
         _rh.redact_headers_middleware()
@@ -191,6 +209,7 @@ def test_missing_dependency_raises_instead_of_passing_through(monkeypatch):
 
 
 def test_passthrough_is_explicit_and_opt_in(monkeypatch):
+    monkeypatch.setattr(_rh, "_resolve_mask_headers", lambda: (None, False))
     monkeypatch.setattr(_rh, "MASK_AVAILABLE", False, raising=True)
     stats = _rh.HeaderStats()
     mw = _rh.redact_headers_middleware_passthrough(stats=stats)
@@ -217,3 +236,41 @@ def test_middleware_constructs_when_dependency_is_present():
     if not _rh.MASK_AVAILABLE:
         pytest.skip("tiny_secret_mask not installed here")
     assert callable(_rh.redact_headers_middleware())
+
+
+class TestMissingDependencyContract(unittest.TestCase):
+    """A redaction layer that cannot redact must not report success.
+
+    This is the one behaviour that has to be exercised WITHOUT the dependency,
+    so it builds the middleware against an environment where the import fails.
+    """
+
+    def test_raises_redaction_unavailable_without_dependency(self):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def failing_import(name, *args, **kwargs):
+            # tiny_secret_mask is imported lazily INSIDE the middleware
+            # factory, so this simulates "not installed" even on a machine
+            # where it is installed -- the check must be about the current
+            # interpreter, not the one that imported the module.
+            if name == "tiny_secret_mask":
+                raise ImportError("simulated: not installed")
+            return real_import(name, *args, **kwargs)
+
+        builtins.__import__ = failing_import
+        try:
+            self.assertFalse(rh.redaction_available())
+            with self.assertRaises(rh.RedactionUnavailable) as ctx:
+                rh.redact_headers_middleware()
+        finally:
+            builtins.__import__ = real_import
+        self.assertIn("tiny-secret-mask", str(ctx.exception))
+
+    def test_passthrough_opt_out_is_explicit_and_harmless(self):
+        mw = rh.redact_headers_middleware_passthrough()
+        req = make_req({"Authorization": "Bearer secret"})
+        self.assertEqual(mw(req, call_pass_through), b"ok")
+        # The passthrough does NOT claim to have redacted anything.
+        self.assertEqual(req.headers["Authorization"], "Bearer secret")

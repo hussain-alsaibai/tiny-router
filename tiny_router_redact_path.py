@@ -59,6 +59,22 @@ def _build_redactor():
 _MASK, MASK_AVAILABLE = _build_redactor()
 
 
+def _mask_available() -> bool:
+    """Is path redaction available NOW?
+
+    The module-level flag is frozen at import. A test (or an app that installs
+    the dependency late, e.g. a plugin loader) must be able to ask the current
+    interpreter, so the check is re-resolved at call time.
+    """
+    if not MASK_AVAILABLE:
+        return False
+    try:
+        from tiny_secret_mask import mask_route_path  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 class RedactionUnavailable(RuntimeError):
     """Raised when path redaction was requested but cannot be performed.
 
@@ -115,7 +131,7 @@ def redact_path_middleware(*, stats: Optional["RedactionStats"] = None) -> Calla
 
     `stats` is an optional `RedactionStats` counter object.
     """
-    if not MASK_AVAILABLE:
+    if not _mask_available():
         raise RedactionUnavailable(
             "tiny_secret_mask is not installed, so path redaction cannot be "
             "performed. Install tiny-secret-mask, or call "

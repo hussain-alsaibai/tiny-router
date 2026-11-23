@@ -23,4 +23,26 @@ jobs:
           pip install pytest
           pip install "tiny-secret-mask @ git+https://github.com/hussain-alsaibai/tiny-secret-mask.git"
       - name: Run test suite
-        run: python -m pytest test_*.py -v
+        # Collect by pattern, never by an explicit file list: the v0.8-v0.9
+        # files were invisible here for two releases because the step named
+        # its two test modules by hand.
+        run: python -m pytest -v
+
+  no-optional-deps:
+    # tiny-secret-mask is optional. A user without it must get SKIPPED
+    # redaction tests, not a collection ERROR that hides every other test in
+    # the file - that is exactly what test_v074 did before 0.9.4.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run test suite WITHOUT the optional dependency
+        run: |
+          pip install pytest
+          python -m pytest -v
+          # Prove the dependency really was absent: if it were installed, the
+          # skips below would mean nothing.
+          python -c "import importlib.util,sys; \
+            sys.exit(0 if importlib.util.find_spec('tiny_secret_mask') is None else 1)"

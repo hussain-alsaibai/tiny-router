@@ -53,7 +53,7 @@ from urllib.parse import parse_qs
 from pathlib import Path
 
 
-__version__ = "0.9.3"
+__version__ = "0.9.4"
 
 
 # ---------- Errors ----------

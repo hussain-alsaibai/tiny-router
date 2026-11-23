@@ -5,9 +5,30 @@ Run: python3 -m unittest tests.test_tiny_router_redact_path -v
 
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
 
-from tiny_router_redact_path import (
+import pytest
+
+# Same rule as test_v074: a missing optional dependency must SKIP the tests
+# that need it, not abort collection of the whole file.
+for _candidate in (Path(__file__).resolve().parent.parent / "tiny-secret-mask",):
+    if _candidate.is_dir():
+        sys.path.insert(0, str(_candidate))
+
+try:
+    import tiny_secret_mask  # noqa: F401
+    _HAS_SECRET_MASK = True
+except ImportError:  # pragma: no cover
+    _HAS_SECRET_MASK = False
+
+requires_secret_mask = pytest.mark.skipif(
+    not _HAS_SECRET_MASK,
+    reason="tiny-secret-mask is not installed; path redaction cannot be exercised",
+)
+
+from tiny_router_redact_path import (  # noqa: E402
     RedactionStats,
     __version__,
     redact_path_middleware,
@@ -53,6 +74,7 @@ class TestRedactionStats(unittest.TestCase):
         self.assertIn("last_redacted_path", d)
 
 
+@requires_secret_mask
 class TestMiddleware(unittest.TestCase):
     def test_redacts_uuid(self) -> None:
         def nxt(req):
@@ -116,6 +138,7 @@ class TestMiddleware(unittest.TestCase):
         self.assertEqual(stats.paths_seen, 2)
 
 
+@requires_secret_mask
 class TestRedactorWithStats(unittest.TestCase):
     def test_returns_pair(self) -> None:
         mw, stats = redactor_with_stats()
@@ -190,6 +213,8 @@ class TestRedactionUnavailableIsLoud(unittest.TestCase):
         self.assertFalse(mw._is_path_redactor)
 
     def test_real_redactor_is_marked(self) -> None:
+        if not _HAS_SECRET_MASK:
+            self.skipTest("tiny-secret_mask is not installed here")
         mw = redact_path_middleware()
         self.assertTrue(mw._is_path_redactor)
 

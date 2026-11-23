@@ -79,6 +79,13 @@ def _build_redactor():
     is None on purpose: the caller decides whether that is fatal or whether
     it asked for the passthrough explicitly.
     """
+    return _resolve_mask_headers()
+
+
+def _resolve_mask_headers():
+    """Resolve the masker NOW. Same contract as above, separate so tests can
+    re-resolve under a simulated missing dependency without reloading the
+    module (the availability flags are frozen at import time)."""
     try:
         from tiny_secret_mask import mask_headers as _mh
         return _mh, True
@@ -87,6 +94,15 @@ def _build_redactor():
 
 
 _MASK_HEADERS, MASK_AVAILABLE = _build_redactor()
+
+
+def redaction_available() -> bool:
+    """Is header redaction actually available in this process?
+
+    Resolved at call time, not import time, so it answers for the interpreter
+    that is running now rather than for the one that imported the module.
+    """
+    return _resolve_mask_headers()[1]
 
 
 def redact_headers_middleware(*, stats: Optional[HeaderStats] = None):
@@ -112,7 +128,7 @@ def redact_headers_middleware(*, stats: Optional[HeaderStats] = None):
     >>> app = Router()
     >>> app.add(redact_headers_middleware())
     """
-    if not MASK_AVAILABLE:
+    if not _resolve_mask_headers()[1]:
         raise RedactionUnavailable(
             "tiny_secret_mask is not installed, so header redaction cannot be "
             "performed. Install tiny-secret-mask, or call "

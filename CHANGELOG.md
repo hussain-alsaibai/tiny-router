@@ -2,6 +2,40 @@
 
 All notable changes to tiny-router are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.4] - 2026-11-23
+
+### Fixed
+
+- **A missing optional dependency aborted pytest collection for the entire
+  test file.** `test_v074_redact_headers.py` did a bare `import
+  tiny_secret_mask` at module scope, so on any machine without it — which is
+  the *documented* way to run tiny-router, the redaction sidecars are optional
+  — collection raised `ModuleNotFoundError` and reported **1 error**, not
+  "16 tests skipped". Every test in that file that does not need the
+  dependency (`HeaderStats`, the missing-dependency contract) never ran, and
+  the signal read as "the suite is broken" rather than "the optional extra is
+  absent". The file now resolves the dependency, marks the three dependent
+  classes `skipif`, and keeps the dependency-independent tests running:
+  `18 passed, 26 skipped` without it, `44 passed` with it.
+  `test_v073_redact_path.py` got the same treatment.
+
+- **Redaction availability was frozen at import time.** `MASK_AVAILABLE` was
+  computed once, when the module was first imported, and
+  `redact_headers_middleware()` read only that flag. An application that
+  installs the dependency later (a plugin loader, a lazy extra) or a test that
+  simulates its absence got the stale answer — the middleware either raised
+  after the dependency was present or installed a redactor that could not
+  redact. Availability is now re-resolved at call time
+  (`redaction_available()` / `_mask_available()`), and the module flag remains
+  for callers that already read it.
+
+### Changed
+
+- CI collects with `python -m pytest` instead of naming two test modules, so a
+  new test file cannot be invisible again. A second job runs the suite with
+  the optional dependency deliberately absent and asserts the import is really
+  unavailable, so the skip path stays exercised instead of silently rotting.
+
 ## [0.9.3] - 2026-11-18
 
 ### Fixed
