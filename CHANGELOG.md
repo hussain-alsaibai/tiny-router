@@ -2,6 +2,48 @@
 
 All notable changes to tiny-router are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.5] - 2026-11-25
+
+### Security
+
+- **`cors(allow_credentials=True)` granted credentialed access to every origin.**
+  `allow_origins` defaults to `["*"]`, and the middleware reflected the
+  caller's `Origin` back with `Access-Control-Allow-Credentials: true`. The
+  reply
+
+  ```
+  Access-Control-Allow-Origin: https://evil.example
+  Access-Control-Allow-Credentials: true
+  ```
+
+  is a **valid grant**, not a refusal — so any page on the internet could read
+  authenticated responses (including ones carrying the user's session cookie)
+  from an API whose entire CORS config was the one word `allow_credentials=True`.
+  The same code also reflected `*`-matched origins on the simple-request path,
+  not just preflight.
+
+  A `"*"` origin cannot legally carry credentials anyway (Fetch standard
+  §3.2.5). Browsers enforce that by *withholding* the response, so the
+  wildcard-with-credentials config could never have worked for the call that
+  needed it — it only failed safely if the browser was the one enforcing. The
+  fix makes the impossible combination an error at construction time, naming
+  the remedy:
+
+  ```python
+  cors(allow_origins=["https://app.example"], allow_credentials=True)
+  ```
+
+  `cors(allow_origins=["*"])` without credentials is unchanged, and an
+  explicit origin list still echoes only that origin.
+
+### Added
+
+- `test_v095_cors_credentials.py` — 9 tests. 4 fail on 0.9.4 (the three
+  rejection cases plus the remedy-in-message assertion); the other 5 hold the
+  safe configurations still in place: an allowed origin still gets the grant,
+  a disallowed origin gets neither header on the simple or preflight path, and
+  the public wildcard-without-credentials config is untouched.
+
 ## [0.9.4] - 2026-11-23
 
 ### Fixed

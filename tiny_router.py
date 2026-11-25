@@ -53,7 +53,7 @@ from urllib.parse import parse_qs
 from pathlib import Path
 
 
-__version__ = "0.9.4"
+__version__ = "0.9.5"
 
 
 # ---------- Errors ----------
@@ -1159,8 +1159,31 @@ def cors(
 
     Example:
         app = Router()
-        app.use(cors(allow_origins=["*"]))
+        app.use(cors(allow_origins=["https://app.example"]))
+
+    ``allow_credentials=True`` cannot be combined with a ``"*"`` origin.
+    The Fetch standard (§3.2.5) forbids the wildcard when the request can
+    carry credentials, and browsers enforce it by *withholding* the response
+    from a credentialed request -- so the combination silently breaks the
+    exact call it was configured for. Reflecting the caller's origin instead,
+    which is what this middleware did before 0.9.5, is worse: it grants every
+    site on the internet credentialed access, because
+    ``Access-Control-Allow-Origin: https://evil.example`` plus
+    ``Access-Control-Allow-Credentials: true`` is a valid grant, not a refusal.
+
+    Combined with the default ``allow_origins=["*"]``, a one-word
+    ``cors(allow_credentials=True)`` was therefore an open credentialed CORS
+    policy for every origin. That combination is now rejected at construction
+    time, with the fix in the message.
     """
+    if allow_credentials and (allow_origins is None or "*" in allow_origins):
+        raise ValueError(
+            "cors(allow_credentials=True) requires an explicit allow_origins "
+            "list; a '*' origin cannot carry credentials (Fetch spec §3.2.5), "
+            "and reflecting the caller's origin would grant credentialed "
+            "access to every site. Pass e.g. "
+            "cors(allow_origins=['https://app.example'], allow_credentials=True)."
+        )
     if allow_origins is None:
         allow_origins = ["*"]
     if allow_methods is None:

@@ -26,6 +26,11 @@ restricted environments). ~36 KB. Zero deps.
 - Static files: `app.static("/static", "./public")`
 - Streaming: `StreamingResponse(generator())`
 - CORS, rate limiter, error handlers
+  - `cors(allow_credentials=True)` requires an explicit `allow_origins` list
+    (0.9.5+). A `"*"` origin cannot legally carry credentials (Fetch spec
+    §3.2.5), and reflecting the caller's origin would grant credentialed
+    access to every site — so the combination raises `ValueError` with the
+    fix in the message.
 - **JWT auth middleware (v0.4.0+)** — stdlib-only HS256 with `aud`/`iss`/`exp`/`nbf` validation, constant-time signature check
 - **Request-ID middleware (v0.4.0+)** — inbound `x-request-id` honored, else `secrets.token_hex(8)` generated
 - **OpenAPI 3.1 export (v0.4.0+)** — `openapi_spec(router)` returns a complete spec dict

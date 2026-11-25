@@ -202,6 +202,11 @@ app.use(cors(
 
 The built-in `cors()` factory handles preflight `OPTIONS` requests automatically.
 
+`allow_credentials=True` must be paired with an explicit `allow_origins` list —
+a `"*"` origin cannot carry credentials (Fetch spec §3.2.5), and reflecting the
+caller's origin would grant credentialed access to every site. The combination
+raises `ValueError` at construction time rather than shipping a wildcard grant.
+
 ### Rate Limiter Middleware
 
 ```python
